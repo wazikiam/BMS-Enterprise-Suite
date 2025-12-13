@@ -1,55 +1,26 @@
-export enum Permission {
-  // User Management
-  USER_CREATE = 'user:create',
-  USER_READ = 'user:read',
-  USER_UPDATE = 'user:update',
-  USER_DELETE = 'user:delete',
-  
-  // Product Management
-  PRODUCT_CREATE = 'product:create',
-  PRODUCT_READ = 'product:read',
-  PRODUCT_UPDATE = 'product:update',
-  PRODUCT_DELETE = 'product:delete',
-  
-  // Sales Management
-  SALE_CREATE = 'sale:create',
-  SALE_READ = 'sale:read',
-  SALE_UPDATE = 'sale:update',
-  SALE_DELETE = 'sale:delete',
-  SALE_APPROVE = 'sale:approve',
-  
-  // Customer Management
-  CUSTOMER_CREATE = 'customer:create',
-  CUSTOMER_READ = 'customer:read',
-  CUSTOMER_UPDATE = 'customer:update',
-  CUSTOMER_DELETE = 'customer:delete',
-  
-  // Inventory Management
-  INVENTORY_READ = 'inventory:read',
-  INVENTORY_UPDATE = 'inventory:update',
-  
-  // Purchase Management
-  PURCHASE_CREATE = 'purchase:create',
-  PURCHASE_READ = 'purchase:read',
-  PURCHASE_UPDATE = 'purchase:update',
-  PURCHASE_APPROVE = 'purchase:approve',
-  
-  // HR Management
-  HR_READ = 'hr:read',
-  HR_UPDATE = 'hr:update',
-  
-  // Reports
-  REPORT_READ = 'report:read',
-  REPORT_EXPORT = 'report:export',
-  
-  // System Settings
-  SETTINGS_READ = 'settings:read',
-  SETTINGS_UPDATE = 'settings:update',
-  
-  // Override Permissions
-  OVERRIDE_CREDIT_LIMIT = 'override:credit_limit',
-  OVERRIDE_PRICE = 'override:price',
-  OVERRIDE_DISCOUNT = 'override:discount'
+// packages/core/src/domain/Role.ts
+
+/**
+ * ============================
+ * AuthZ Domain — Role
+ * ============================
+ * Compatibility layer:
+ * - Permission is owned by Permission.ts
+ * - Re-exported here to avoid breaking services
+ */
+
+import { Permission } from './Permission';
+
+/**
+ * Re-export Permission for backward compatibility
+ */
+export { Permission };
+
+export interface Role {
+  id: string;
+  name: string;
+  description?: string;
+  permissionIds: Permission[];
 }
 
 export interface RoleDefinition {
@@ -64,14 +35,14 @@ export const ROLES: Record<string, RoleDefinition> = {
   admin: {
     id: 'admin',
     name: 'Administrator',
-    description: 'Full system access with all permissions',
+    description: 'Full system access',
     permissions: Object.values(Permission),
     isDefault: false
   },
   manager: {
     id: 'manager',
     name: 'Manager',
-    description: 'Supervisory access with approval capabilities',
+    description: 'Supervisory access',
     permissions: [
       Permission.USER_READ,
       Permission.PRODUCT_READ,
@@ -85,22 +56,14 @@ export const ROLES: Record<string, RoleDefinition> = {
       Permission.CUSTOMER_UPDATE,
       Permission.INVENTORY_READ,
       Permission.INVENTORY_UPDATE,
-      Permission.PURCHASE_READ,
-      Permission.PURCHASE_APPROVE,
-      Permission.HR_READ,
-      Permission.REPORT_READ,
-      Permission.REPORT_EXPORT,
-      Permission.SETTINGS_READ,
-      Permission.OVERRIDE_CREDIT_LIMIT,
-      Permission.OVERRIDE_PRICE,
-      Permission.OVERRIDE_DISCOUNT
+      Permission.REPORT_READ
     ],
     isDefault: false
   },
   seller: {
     id: 'seller',
     name: 'Seller',
-    description: 'Sales operations with limited permissions',
+    description: 'Sales operations',
     permissions: [
       Permission.PRODUCT_READ,
       Permission.SALE_CREATE,
@@ -114,7 +77,7 @@ export const ROLES: Record<string, RoleDefinition> = {
   viewer: {
     id: 'viewer',
     name: 'Viewer',
-    description: 'Read-only access for auditing',
+    description: 'Read-only access',
     permissions: [
       Permission.USER_READ,
       Permission.PRODUCT_READ,
@@ -127,10 +90,14 @@ export const ROLES: Record<string, RoleDefinition> = {
   }
 };
 
-export function hasPermission(role: string, permission: Permission): boolean {
-  return ROLES[role]?.permissions.includes(permission) || false;
+/**
+ * Backward-compatible helpers
+ * (read-only, no enforcement)
+ */
+export function hasPermission(roleId: string, permission: Permission): boolean {
+  return ROLES[roleId]?.permissions.includes(permission) ?? false;
 }
 
-export function getUserPermissions(role: string): Permission[] {
-  return ROLES[role]?.permissions || [];
+export function getUserPermissions(roleId: string): Permission[] {
+  return ROLES[roleId]?.permissions ?? [];
 }

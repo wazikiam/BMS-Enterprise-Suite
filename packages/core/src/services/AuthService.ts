@@ -3,7 +3,6 @@ import jwt from 'jsonwebtoken';
 import { User, LoginCredentials, AuthResponse, CreateUserDTO } from '../domain/User';
 import { UserRole } from '../domain/User';
 import { Session, CreateSessionDTO, TokenPayload, SESSION_CONFIG, calculateExpiryDate } from '../domain/Session';
-import { ROLES } from '../domain/Role';
 
 export interface IAuthService {
   register(userData: CreateUserDTO): Promise<Omit<User, 'passwordHash'>>;
