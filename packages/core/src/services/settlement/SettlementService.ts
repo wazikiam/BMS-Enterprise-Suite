@@ -6,12 +6,13 @@ import { PaymentStatus } from '../../domain/payment/PaymentStatus';
 /**
  * SettlementService
  * -----------------
- * Applies posted payments to receivables and invoices.
+ * Applies and rolls back posted payments against invoices and receivables.
  *
- * Design:
+ * Principles:
  * - Deterministic
- * - Idempotent by payment.id
- * - No payment creation or mutation
+ * - Idempotent per payment.id
+ * - No payment mutation
+ * - No persistence assumptions beyond repository contracts
  */
 export class SettlementService {
   constructor(
@@ -19,8 +20,12 @@ export class SettlementService {
     private receivablesRepository: any
   ) {}
 
+  /* =====================================================
+     APPLY
+     ===================================================== */
+
   /**
-   * Apply a posted payment to invoices and AR.
+   * Apply a POSTED payment to invoices and AR.
    */
   settlePayment(payment: Payment): void {
     if (payment.status !== PaymentStatus.POSTED) {
@@ -32,18 +37,17 @@ export class SettlementService {
       this.applyPaymentToInvoice(invoiceId, payment);
     }
 
-    // 2. Apply to customer receivables
+    // 2. Apply to receivables
     this.applyPaymentToReceivables(payment);
   }
 
-  /* =====================================================
-     INTERNALS
-     ===================================================== */
-
-  private applyPaymentToInvoice(invoiceId: string, payment: Payment): void {
-    // Repository contract expectations:
+  private applyPaymentToInvoice(
+    invoiceId: string,
+    payment: Payment
+  ): void {
+    // Repository contract:
     // - getById(id)
-    // - applyPayment(id, amount, paymentId)
+    // - applyPayment(invoiceId, amount, paymentId)
     const invoice = this.invoiceRepository.getById(invoiceId);
 
     if (!invoice) {
@@ -58,11 +62,54 @@ export class SettlementService {
   }
 
   private applyPaymentToReceivables(payment: Payment): void {
-    // Repository contract expectations:
-    // - applyPayment(customerId, amount, paymentId)
+    // Repository contract:
+    // - applyPayment(paymentId, amount)
     this.receivablesRepository.applyPayment(
       payment.id,
       payment.amount
+    );
+  }
+
+  /* =====================================================
+     ROLLBACK
+     ===================================================== */
+
+  /**
+   * Roll back the effects of a previously settled payment.
+   */
+  rollbackPayment(payment: Payment): void {
+    if (payment.status !== PaymentStatus.REVERSED) {
+      throw new Error('Only REVERSED payments can be rolled back');
+    }
+
+    // 1. Roll back invoice applications
+    for (const refId of payment.appliedInvoiceIds) {
+      this.rollbackInvoicePayment(refId, payment);
+    }
+
+    // 2. Roll back receivables
+    this.rollbackReceivables(payment);
+  }
+
+  private rollbackInvoicePayment(
+    invoiceId: string,
+    payment: Payment
+  ): void {
+    // Repository contract:
+    // - rollbackPayment(invoiceId, amount, paymentId)
+    this.invoiceRepository.rollbackPayment(
+      invoiceId,
+      Math.abs(payment.amount),
+      payment.id
+    );
+  }
+
+  private rollbackReceivables(payment: Payment): void {
+    // Repository contract:
+    // - rollbackPayment(paymentId, amount)
+    this.receivablesRepository.rollbackPayment(
+      payment.id,
+      Math.abs(payment.amount)
     );
   }
 }
