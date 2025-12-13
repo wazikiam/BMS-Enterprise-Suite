@@ -1,0 +1,275 @@
+import { Request, Response, NextFunction } from 'express';
+import { AuthService } from '@bms/core';
+import { createErrorResponse } from '@bms/shared';
+
+export class AuthMiddleware {
+  constructor(private authService: AuthService) {}
+
+  /**
+   * Middleware to authenticate requests using JWT
+   */
+  authenticate = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      // Get token from cookies or Authorization header
+      const token = this.extractToken(req);
+      
+      if (!token) {
+        res.status(401).json(createErrorResponse('Authentication required'));
+        return;
+      }
+
+      // Validate token
+      const payload = await this.authService.validateToken(token);
+      
+      // Attach user info to request
+      req.user = {
+        id: payload.userId,
+        email: payload.email,
+        role: payload.role,
+        sessionId: payload.sessionId
+      };
+
+      next();
+    } catch (error) {
+      console.error('Authentication error:', error);
+      res.status(401).json(createErrorResponse(
+        error instanceof Error ? error.message : 'Invalid token'
+      ));
+    }
+  };
+
+  /**
+   * Middleware to require specific user role
+   */
+  requireRole = (...allowedRoles: string[]) => {
+    return (req: Request, res: Response, next: NextFunction): void => {
+      if (!req.user) {
+        res.status(401).json(createErrorResponse('Authentication required'));
+        return;
+      }
+
+      const userRole = req.user.role;
+      
+      if (!allowedRoles.includes(userRole)) {
+        res.status(403).json(createErrorResponse(
+          `Insufficient permissions. Required roles: ${allowedRoles.join(', ')}`
+        ));
+        return;
+      }
+
+      next();
+    };
+  };
+
+  /**
+   * Middleware to require specific permission
+   * Note: This requires a permission service to be integrated
+   */
+  requirePermission = (permission: string) => {
+    return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      if (!req.user) {
+        res.status(401).json(createErrorResponse('Authentication required'));
+        return;
+      }
+
+      // TODO: Integrate with permission service
+      // For now, check based on role
+      const userRole = req.user.role;
+      
+      // Simple role-based permission check (to be enhanced)
+      const rolePermissions: Record<string, string[]> = {
+        admin: ['*'],
+        manager: [
+          'user:read', 'product:read', 'product:update',
+          'sale:create', 'sale:read', 'sale:update', 'sale:approve',
+          'customer:create', 'customer:read', 'customer:update',
+          'inventory:read', 'inventory:update',
+          'purchase:read', 'purchase:approve',
+          'hr:read', 'report:read', 'report:export',
+          'settings:read', 'override:credit_limit', 'override:price', 'override:discount'
+        ],
+        seller: [
+          'product:read', 'sale:create', 'sale:read',
+          'customer:create', 'customer:read', 'inventory:read'
+        ],
+        viewer: [
+          'user:read', 'product:read', 'sale:read',
+          'customer:read', 'inventory:read', 'report:read'
+        ]
+      };
+
+      const userPermissions = rolePermissions[userRole] || [];
+      const hasPermission = userPermissions.includes('*') || userPermissions.includes(permission);
+
+      if (!hasPermission) {
+        res.status(403).json(createErrorResponse(
+          `Insufficient permissions. Required: ${permission}`
+        ));
+        return;
+      }
+
+      next();
+    };
+  };
+
+  /**
+   * Middleware to check if user is authenticated (optional)
+   * Attaches user if token is valid, but doesn't block if not
+   */
+  optionalAuth = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const token = this.extractToken(req);
+      
+      if (token) {
+        const payload = await this.authService.validateToken(token);
+        req.user = {
+          id: payload.userId,
+          email: payload.email,
+          role: payload.role,
+          sessionId: payload.sessionId
+        };
+      }
+    } catch (error) {
+      // Silent fail for optional auth
+      console.debug('Optional auth failed:', error);
+    }
+
+    next();
+  };
+
+  /**
+   * Middleware to validate refresh token
+   */
+  validateRefreshToken = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const refreshToken = req.cookies.refresh_token || req.body.refreshToken;
+      
+      if (!refreshToken) {
+        res.status(400).json(createErrorResponse('Refresh token required'));
+        return;
+      }
+
+      // Validate refresh token (simplified - in production, use proper validation)
+      // For now, just attach to request
+      req.refreshToken = refreshToken;
+      next();
+    } catch (error) {
+      res.status(401).json(createErrorResponse('Invalid refresh token'));
+    }
+  };
+
+  /**
+   * Middleware to rate limit login attempts
+   */
+  loginRateLimit = (maxAttempts: number = 5, windowMs: number = 15 * 60 * 1000) => {
+    const attempts = new Map<string, { count: number; resetTime: number }>();
+
+    return (req: Request, res: Response, next: NextFunction): void => {
+      const ip = req.ip || req.socket.remoteAddress || 'unknown';
+      const now = Date.now();
+
+      // Clean old entries
+      for (const [key, data] of attempts.entries()) {
+        if (now > data.resetTime) {
+          attempts.delete(key);
+        }
+      }
+
+      const userAttempts = attempts.get(ip);
+
+      if (!userAttempts) {
+        attempts.set(ip, { count: 1, resetTime: now + windowMs });
+        next();
+        return;
+      }
+
+      if (now > userAttempts.resetTime) {
+        // Reset window
+        attempts.set(ip, { count: 1, resetTime: now + windowMs });
+        next();
+        return;
+      }
+
+      if (userAttempts.count >= maxAttempts) {
+        const remainingTime = Math.ceil((userAttempts.resetTime - now) / 1000 / 60);
+        res.status(429).json(createErrorResponse(
+          `Too many login attempts. Please try again in ${remainingTime} minutes`
+        ));
+        return;
+      }
+
+      userAttempts.count++;
+      next();
+    };
+  };
+
+  /**
+   * Middleware to check if user account is active
+   */
+  checkAccountActive = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    if (!req.user) {
+      res.status(401).json(createErrorResponse('Authentication required'));
+      return;
+    }
+
+    // TODO: Fetch user from database and check status
+    // For now, assume all authenticated users are active
+    next();
+  };
+
+  /**
+   * Middleware to log user activity
+   */
+  logActivity = (activity: string) => {
+    return (req: Request, res: Response, next: NextFunction): void => {
+      const user = req.user;
+      const ip = req.ip || req.socket.remoteAddress;
+      const method = req.method;
+      const url = req.originalUrl;
+      const timestamp = new Date().toISOString();
+
+      console.log(`[${timestamp}] ${activity} - User: ${user?.id || 'anonymous'}, IP: ${ip}, ${method} ${url}`);
+      
+      // TODO: Store activity in database
+      next();
+    };
+  };
+
+  /**
+   * Extract token from request
+   */
+  private extractToken(req: Request): string | null {
+    // Check Authorization header
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      return authHeader.substring(7);
+    }
+
+    // Check cookies
+    if (req.cookies.access_token) {
+      return req.cookies.access_token;
+    }
+
+    // Check query parameter (for debugging only)
+    if (req.query.token && typeof req.query.token === 'string') {
+      return req.query.token;
+    }
+
+    return null;
+  }
+}
+
+// Extend Express Request type
+declare global {
+  namespace Express {
+    interface Request {
+      user?: {
+        id: string;
+        email: string;
+        role: string;
+        sessionId: string;
+      };
+      refreshToken?: string;
+    }
+  }
+}

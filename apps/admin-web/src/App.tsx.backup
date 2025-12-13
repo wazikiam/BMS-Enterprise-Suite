@@ -1,0 +1,39 @@
+import React from 'react';
+import { Box, Button, TextField, Typography, Paper } from '@mui/material';
+
+function App() {
+  return (
+    <Box sx={{ 
+      minHeight: '100vh', 
+      display: 'flex', 
+      alignItems: 'center', 
+      justifyContent: 'center',
+      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+    }}>
+      <Paper sx={{ p: 4, width: 400, borderRadius: 2 }}>
+        <Typography variant="h4" gutterBottom align="center" fontWeight="bold">
+          BMS Enterprise Suite
+        </Typography>
+        <Typography variant="body2" color="text.secondary" align="center" gutterBottom>
+          Professional Business Management System
+        </Typography>
+        
+        <Box sx={{ mt: 3 }}>
+          <TextField fullWidth label="Email" margin="normal" />
+          <TextField fullWidth label="Password" type="password" margin="normal" />
+          <Button fullWidth variant="contained" size="large" sx={{ mt: 2 }}>
+            Sign In
+          </Button>
+        </Box>
+
+        <Box sx={{ mt: 3, textAlign: 'center' }}>
+          <Typography variant="caption" color="text.secondary">
+            Version 1.0.0 • Week 1 Foundation Complete
+          </Typography>
+        </Box>
+      </Paper>
+    </Box>
+  );
+}
+
+export default App;

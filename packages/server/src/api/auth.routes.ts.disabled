@@ -1,0 +1,167 @@
+import { Router } from 'express';
+import { AuthController } from './auth.controller';
+import { AuthMiddleware } from './auth.middleware';
+import { AuthService } from '@bms/core';
+
+export function createAuthRoutes(
+  authService: AuthService,
+  authMiddleware: AuthMiddleware
+): Router {
+  const router = Router();
+  const authController = new AuthController(authService);
+
+  // Public routes (no authentication required)
+  router.post('/register', 
+    authMiddleware.loginRateLimit(3, 30 * 60 * 1000), // 3 attempts per 30 minutes
+    authController.register.bind(authController)
+  );
+
+  router.post('/login',
+    authMiddleware.loginRateLimit(5, 15 * 60 * 1000), // 5 attempts per 15 minutes
+    authController.login.bind(authController)
+  );
+
+  router.post('/refresh',
+    authMiddleware.validateRefreshToken,
+    authController.refreshToken.bind(authController)
+  );
+
+  router.post('/validate',
+    authController.validateToken.bind(authController)
+  );
+
+  // Protected routes (authentication required)
+  router.post('/logout',
+    authMiddleware.authenticate,
+    authMiddleware.logActivity('logout'),
+    authController.logout.bind(authController)
+  );
+
+  router.get('/me',
+    authMiddleware.authenticate,
+    authMiddleware.checkAccountActive,
+    authController.getCurrentUser.bind(authController)
+  );
+
+  router.put('/password',
+    authMiddleware.authenticate,
+    authMiddleware.logActivity('password_change'),
+    authController.changePassword.bind(authController)
+  );
+
+  // Admin-only routes
+  router.get('/sessions',
+    authMiddleware.authenticate,
+    authMiddleware.requireRole('admin', 'manager'),
+    authMiddleware.logActivity('view_sessions'),
+    (req, res) => {
+      // TODO: Implement session listing
+      res.status(200).json({ message: 'Session listing endpoint' });
+    }
+  );
+
+  router.delete('/sessions/:sessionId',
+    authMiddleware.authenticate,
+    authMiddleware.requireRole('admin'),
+    authMiddleware.logActivity('revoke_session'),
+    (req, res) => {
+      // TODO: Implement session revocation
+      res.status(200).json({ message: 'Session revocation endpoint' });
+    }
+  );
+
+  // Health check endpoint
+  router.get('/health', (req, res) => {
+    res.status(200).json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      service: 'auth'
+    });
+  });
+
+  // Documentation endpoint
+  router.get('/docs', (req, res) => {
+    res.status(200).json({
+      endpoints: [
+        {
+          method: 'POST',
+          path: '/auth/register',
+          description: 'Register a new user',
+          authentication: 'none',
+          body: {
+            email: 'string',
+            password: 'string',
+            firstName: 'string',
+            lastName: 'string',
+            phone: 'string (optional)',
+            role: 'string (admin|manager|seller|viewer)'
+          }
+        },
+        {
+          method: 'POST',
+          path: '/auth/login',
+          description: 'Login user',
+          authentication: 'none',
+          body: {
+            email: 'string',
+            password: 'string'
+          }
+        },
+        {
+          method: 'POST',
+          path: '/auth/logout',
+          description: 'Logout user',
+          authentication: 'required',
+          body: 'none'
+        },
+        {
+          method: 'GET',
+          path: '/auth/me',
+          description: 'Get current user info',
+          authentication: 'required',
+          body: 'none'
+        },
+        {
+          method: 'PUT',
+          path: '/auth/password',
+          description: 'Change password',
+          authentication: 'required',
+          body: {
+            oldPassword: 'string',
+            newPassword: 'string'
+          }
+        },
+        {
+          method: 'POST',
+          path: '/auth/refresh',
+          description: 'Refresh access token',
+          authentication: 'refresh token',
+          body: {
+            refreshToken: 'string (optional if in cookies)'
+          }
+        }
+      ]
+    });
+  });
+
+  return router;
+}
+
+// Export route configuration
+export const authRoutesConfig = {
+  path: '/auth',
+  middleware: [],
+  routes: [
+    { method: 'POST', path: '/register', auth: false },
+    { method: 'POST', path: '/login', auth: false },
+    { method: 'POST', path: '/refresh', auth: 'refresh' },
+    { method: 'POST', path: '/validate', auth: false },
+    { method: 'POST', path: '/logout', auth: true },
+    { method: 'GET', path: '/me', auth: true },
+    { method: 'PUT', path: '/password', auth: true },
+    { method: 'GET', path: '/sessions', auth: true, roles: ['admin', 'manager'] },
+    { method: 'DELETE', path: '/sessions/:sessionId', auth: true, roles: ['admin'] },
+    { method: 'GET', path: '/health', auth: false },
+    { method: 'GET', path: '/docs', auth: false }
+  ]
+};

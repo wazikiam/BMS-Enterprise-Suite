@@ -1,0 +1,236 @@
+import { Request, Response } from 'express';
+import { AuthService, LoginCredentials, CreateUserDTO } from '@bms/core';
+import { createSuccessResponse, createErrorResponse, validateEmail } from '@bms/shared';
+
+export class AuthController {
+  constructor(private authService: AuthService) {}
+
+  async register(req: Request, res: Response): Promise<void> {
+    try {
+      const userData: CreateUserDTO = req.body;
+
+      // Validate required fields
+      if (!userData.email || !userData.password || !userData.firstName || !userData.lastName) {
+        res.status(400).json(createErrorResponse('Missing required fields'));
+        return;
+      }
+
+      // Validate email format
+      if (!validateEmail(userData.email)) {
+        res.status(400).json(createErrorResponse('Invalid email format'));
+        return;
+      }
+
+      // Validate password strength (could be enhanced)
+      if (userData.password.length < 8) {
+        res.status(400).json(createErrorResponse('Password must be at least 8 characters long'));
+        return;
+      }
+
+      const user = await this.authService.register(userData);
+      
+      res.status(201).json(createSuccessResponse(
+        user,
+        'User registered successfully'
+      ));
+    } catch (error) {
+      console.error('Registration error:', error);
+      res.status(400).json(createErrorResponse(
+        error instanceof Error ? error.message : 'Registration failed'
+      ));
+    }
+  }
+
+  async login(req: Request, res: Response): Promise<void> {
+    try {
+      const credentials: LoginCredentials = req.body;
+      const ipAddress = req.ip || req.socket.remoteAddress;
+      const userAgent = req.headers['user-agent'];
+
+      // Validate required fields
+      if (!credentials.email || !credentials.password) {
+        res.status(400).json(createErrorResponse('Email and password are required'));
+        return;
+      }
+
+      const authResponse = await this.authService.login(
+        credentials,
+        ipAddress,
+        userAgent
+      );
+
+      // Set HTTP-only cookie for token
+      res.cookie('access_token', authResponse.token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: authResponse.expiresIn * 1000
+      });
+
+      // Set refresh token cookie
+      res.cookie('refresh_token', authResponse.token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+      });
+
+      res.status(200).json(createSuccessResponse(
+        {
+          user: authResponse.user,
+          expiresIn: authResponse.expiresIn
+        },
+        'Login successful'
+      ));
+    } catch (error) {
+      console.error('Login error:', error);
+      res.status(401).json(createErrorResponse(
+        error instanceof Error ? error.message : 'Invalid credentials'
+      ));
+    }
+  }
+
+  async logout(req: Request, res: Response): Promise<void> {
+    try {
+      const token = req.cookies.access_token || req.headers.authorization?.split(' ')[1];
+      
+      if (token) {
+        await this.authService.logout(token);
+      }
+
+      // Clear cookies
+      res.clearCookie('access_token');
+      res.clearCookie('refresh_token');
+
+      res.status(200).json(createSuccessResponse(
+        null,
+        'Logout successful'
+      ));
+    } catch (error) {
+      console.error('Logout error:', error);
+      res.status(500).json(createErrorResponse('Logout failed'));
+    }
+  }
+
+  async refreshToken(req: Request, res: Response): Promise<void> {
+    try {
+      const refreshToken = req.cookies.refresh_token || req.body.refreshToken;
+      
+      if (!refreshToken) {
+        res.status(400).json(createErrorResponse('Refresh token required'));
+        return;
+      }
+
+      const authResponse = await this.authService.refreshToken(refreshToken);
+
+      // Set new cookies
+      res.cookie('access_token', authResponse.token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: authResponse.expiresIn * 1000
+      });
+
+      res.status(200).json(createSuccessResponse(
+        {
+          user: authResponse.user,
+          expiresIn: authResponse.expiresIn
+        },
+        'Token refreshed successfully'
+      ));
+    } catch (error) {
+      console.error('Token refresh error:', error);
+      res.status(401).json(createErrorResponse('Invalid refresh token'));
+      
+      // Clear invalid refresh token
+      res.clearCookie('refresh_token');
+    }
+  }
+
+  async getCurrentUser(req: Request, res: Response): Promise<void> {
+    try {
+      // User should be attached to request by auth middleware
+      if (!req.user) {
+        res.status(401).json(createErrorResponse('Not authenticated'));
+        return;
+      }
+
+      res.status(200).json(createSuccessResponse(
+        req.user,
+        'Current user retrieved'
+      ));
+    } catch (error) {
+      console.error('Get current user error:', error);
+      res.status(500).json(createErrorResponse('Failed to get current user'));
+    }
+  }
+
+  async changePassword(req: Request, res: Response): Promise<void> {
+    try {
+      const { oldPassword, newPassword } = req.body;
+      const userId = req.user?.id;
+
+      if (!userId) {
+        res.status(401).json(createErrorResponse('Not authenticated'));
+        return;
+      }
+
+      if (!oldPassword || !newPassword) {
+        res.status(400).json(createErrorResponse('Old and new passwords are required'));
+        return;
+      }
+
+      if (newPassword.length < 8) {
+        res.status(400).json(createErrorResponse('New password must be at least 8 characters long'));
+        return;
+      }
+
+      await this.authService.changePassword(userId, oldPassword, newPassword);
+
+      res.status(200).json(createSuccessResponse(
+        null,
+        'Password changed successfully'
+      ));
+    } catch (error) {
+      console.error('Change password error:', error);
+      res.status(400).json(createErrorResponse(
+        error instanceof Error ? error.message : 'Password change failed'
+      ));
+    }
+  }
+
+  async validateToken(req: Request, res: Response): Promise<void> {
+    try {
+      const token = req.cookies.access_token || req.headers.authorization?.split(' ')[1];
+      
+      if (!token) {
+        res.status(400).json(createErrorResponse('Token required'));
+        return;
+      }
+
+      const payload = await this.authService.validateToken(token);
+
+      res.status(200).json(createSuccessResponse(
+        {
+          valid: true,
+          payload
+        },
+        'Token is valid'
+      ));
+    } catch (error) {
+      res.status(401).json(createSuccessResponse(
+        { valid: false },
+        'Token is invalid'
+      ));
+    }
+  }
+}
+
+// Middleware to extract user from request
+declare global {
+  namespace Express {
+    interface Request {
+      user?: any;
+    }
+  }
+}

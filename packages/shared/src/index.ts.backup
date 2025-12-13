@@ -1,0 +1,152 @@
+// Types exports
+export * from './types/roles.types';
+export * from './types/permissions.types';
+
+// Re-export commonly used types
+export type {
+  UserRoleInfo,
+  RoleAssignment,
+  RoleChangeRequest,
+  ModuleAccess,
+  UserAccessSummary,
+  PermissionCheck,
+  PermissionResult,
+  ModulePermissionConfig,
+  UserPermissionSummary
+} from './types/roles.types';
+
+// Utility functions
+export { 
+  isValidRole, 
+  getRoleInfo, 
+  canChangeRole, 
+  getRoleHierarchy, 
+  isHigherOrEqualRole 
+} from './types/roles.types';
+
+export {
+  Permission,
+  checkPermissions,
+  createPermissionGuard,
+  getAccessibleModules,
+  getUserPermissionSummary,
+  MODULE_PERMISSION_CONFIGS
+} from './types/permissions.types';
+
+// Shared constants
+export const APP_VERSION = '1.0.0';
+export const SUPPORTED_LANGUAGES = ['en', 'fr', 'ar'] as const;
+export const DEFAULT_LANGUAGE = 'fr';
+export const DATE_FORMAT = 'dd-mm-yyyy';
+
+// Common interfaces
+export interface ApiResponse<T = any> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  message?: string;
+  timestamp: Date;
+}
+
+export interface PaginatedResponse<T> extends ApiResponse<T[]> {
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+}
+
+export interface ValidationError {
+  field: string;
+  message: string;
+  code: string;
+}
+
+export interface ApiError extends ApiResponse {
+  statusCode: number;
+  validationErrors?: ValidationError[];
+}
+
+// Utility functions for API responses
+export function createSuccessResponse<T>(data: T, message?: string): ApiResponse<T> {
+  return {
+    success: true,
+    data,
+    message,
+    timestamp: new Date()
+  };
+}
+
+export function createPaginatedResponse<T>(
+  data: T[],
+  pagination: PaginatedResponse<T>['pagination'],
+  message?: string
+): PaginatedResponse<T> {
+  return {
+    success: true,
+    data,
+    message,
+    timestamp: new Date(),
+    pagination
+  };
+}
+
+export function createErrorResponse(
+  error: string,
+  statusCode: number = 400,
+  validationErrors?: ValidationError[]
+): ApiError {
+  return {
+    success: false,
+    error,
+    statusCode,
+    validationErrors,
+    timestamp: new Date()
+  };
+}
+
+// Shared validation utilities
+export function validateEmail(email: string): boolean {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+}
+
+export function validatePhone(phone: string): boolean {
+  const phoneRegex = /^[\d\s\-\+\(\)]{8,15}$/;
+  return phoneRegex.test(phone);
+}
+
+export function formatDate(date: Date | string): string {
+  const d = new Date(date);
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+  return `${day}-${month}-${year}`;
+}
+
+export function parseDate(dateString: string): Date {
+  const [day, month, year] = dateString.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
+// Currency formatting
+export function formatCurrency(amount: number, currency: string = 'MAD'): string {
+  return new Intl.NumberFormat('fr-FR', {
+    style: 'currency',
+    currency: currency === 'MAD' ? 'USD' : currency, // MAD not in Intl, using USD as proxy
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(amount).replace('USD', currency); // Replace USD with MAD
+}
+
+// Shared configuration
+export const SHARED_CONFIG = {
+  maxUploadSize: 10 * 1024 * 1024, // 10MB
+  allowedFileTypes: ['image/jpeg', 'image/png', 'image/gif', 'application/pdf'],
+  sessionTimeout: 30 * 60 * 1000, // 30 minutes
+  maxLoginAttempts: 5,
+  passwordResetExpiry: 24 * 60 * 60 * 1000 // 24 hours
+};
