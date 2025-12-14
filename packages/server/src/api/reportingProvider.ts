@@ -1,16 +1,19 @@
+// packages/server/src/api/reportingProvider.ts
+
 import { ReportingQueryImpl } from '@bms/core/src/reporting/queries/ReportingQueryImpl';
 import { SnapshotGenerationService } from '@bms/core/src/reporting/services/SnapshotGenerationService';
 
 import { InvoiceRepositoryAdapter } from './InvoiceRepositoryAdapter';
 import { PostgresReportingSnapshotRepository } from './PostgresReportingSnapshotRepository';
 import { PostgresFinancialPeriodRepository } from './PostgresFinancialPeriodRepository';
+import { FinancialPeriodReadModel } from './FinancialPeriodReadModel';
 import { getPostgresPool } from '../db/PostgresClient';
 
 /**
- * Period lock guard.
+ * PeriodLockGuard
  *
- * This is the SINGLE authoritative enforcement seam for
- * financial period governance during snapshot generation.
+ * Single authoritative enforcement seam for financial period governance
+ * during snapshot generation.
  */
 export interface PeriodLockGuard {
   assertSnapshotGenerationAllowed(params: {
@@ -21,52 +24,74 @@ export interface PeriodLockGuard {
 }
 
 /**
- * Enforces CLOSED-period rejection using persisted financial periods.
+ * Database-backed period governance.
+ *
+ * Rules:
+ * - If NO financial period exists for (period_start, period_end) => allow (ungoverned)
+ * - If effective state is CLOSED => reject
+ * - OPEN / REOPENED => allow
+ *
+ * Determinism is guaranteed by:
+ * - Append-only financial_periods
+ * - Repository determinism checks (ambiguous max(created_at) => error)
+ * - Read-model centralization (single interpretation point)
  */
 class DatabaseBackedPeriodLockGuard implements PeriodLockGuard {
-  constructor(
-    private readonly financialPeriodRepository: PostgresFinancialPeriodRepository
-  ) {}
+  constructor(private readonly periodReadModel: FinancialPeriodReadModel) {}
 
   async assertSnapshotGenerationAllowed(params: {
     periodFrom: Date;
     periodTo: Date;
     asOf: Date;
   }): Promise<void> {
-    const latest = await this.financialPeriodRepository.getLatestForPeriod({
+    const effective = await this.periodReadModel.resolveEffectivePeriod({
       periodFrom: params.periodFrom,
       periodTo: params.periodTo,
     });
 
-    if (latest && latest.state === 'CLOSED') {
+    // Ungoverned period => allowed (explicit)
+    if (!effective) return;
+
+    if (effective.state === 'CLOSED') {
       throw new Error(
-        `Financial period ${params.periodFrom.toISOString()} → ${params.periodTo.toISOString()} is CLOSED`
+        `Financial period ${effective.periodStart.toISOString()} -> ${effective.periodEnd.toISOString()} is CLOSED`
       );
     }
   }
 }
 
 /**
- * Reporting provider composes reporting read models
- * and snapshot orchestration.
+ * ReportingProvider
  *
- * This is the APPLICATION BOUNDARY for reporting.
- * Governance rules MUST be enforced here.
+ * Application boundary for reporting.
+ * - Composes read models
+ * - Orchestrates snapshot generation
+ * - Enforces governance rules
+ *
+ * No HTTP. No framework logic.
  */
 export function createReportingProvider() {
   const pool = getPostgresPool();
 
+  // Read models
   const invoiceRepository = new InvoiceRepositoryAdapter();
   const reportingQuery = new ReportingQueryImpl(invoiceRepository);
 
+  // Persistence
   const snapshotRepository = new PostgresReportingSnapshotRepository(pool);
+  const financialPeriodRepository = new PostgresFinancialPeriodRepository(pool);
 
-  const financialPeriodRepository =
-    new PostgresFinancialPeriodRepository(pool);
+  // Period read model (single deterministic interpretation point)
+  const financialPeriodReadModel = new FinancialPeriodReadModel(
+    financialPeriodRepository
+  );
 
-  const periodLockGuard: PeriodLockGuard =
-    new DatabaseBackedPeriodLockGuard(financialPeriodRepository);
+  // Governance
+  const periodLockGuard: PeriodLockGuard = new DatabaseBackedPeriodLockGuard(
+    financialPeriodReadModel
+  );
 
+  // Snapshot orchestration (core service remains unaware of governance)
   const snapshotService = new SnapshotGenerationService(
     reportingQuery,
     snapshotRepository
