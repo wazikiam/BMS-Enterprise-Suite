@@ -1,9 +1,9 @@
 import { Router } from 'express';
-import ReportingProvider from '../../api/reportingProvider';
+import { ReportingProvider } from '../../api/reportingProvider';
 
 const router = Router();
 
-// Instantiate provider (composition layer responsibility)
+// Composition-layer instantiation
 const reportingProvider = new ReportingProvider();
 
 /**
