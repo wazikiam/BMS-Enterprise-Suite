@@ -3,38 +3,30 @@
 import { getPostgresPool } from '../db/PostgresClient';
 
 import { PostgresLedgerPostingRepository } from './PostgresLedgerPostingRepository';
-import { FinancialPeriodReadModel } from './FinancialPeriodReadModel';
-import { PostgresFinancialPeriodRepository } from './PostgresFinancialPeriodRepository';
+import { PostgresLedgerBalanceRepository } from './PostgresLedgerBalanceRepository';
 
-import { LedgerPostingWriteGuard } from './LedgerPostingWriteGuard';
-import { LedgerPostingCommandService } from './LedgerPostingCommandService';
-import { LedgerPostingController } from './LedgerPostingController';
+import { LedgerBalanceQueryImpl } from '@bms/core/src/ledger-balances/LedgerBalanceQueryImpl';
+import { LedgerBalanceCalculator } from '@bms/core/src/ledger-balances/LedgerBalanceCalculator';
 
 export function createLedgerProvider() {
   const pool = getPostgresPool();
 
-  const ledgerPostingRepository =
-    new PostgresLedgerPostingRepository(pool);
+  // Repositories
+  const postingRepository = new PostgresLedgerPostingRepository(pool);
+  const balanceRepository = new PostgresLedgerBalanceRepository(pool);
 
-  const financialPeriodRepository =
-    new PostgresFinancialPeriodRepository(pool);
+  // Calculator (pure, deterministic)
+  const calculator = new LedgerBalanceCalculator();
 
-  const periodReadModel =
-    new FinancialPeriodReadModel(financialPeriodRepository);
-
-  const writeGuard =
-    new LedgerPostingWriteGuard(periodReadModel);
-
-  const commandService =
-    new LedgerPostingCommandService(
-      ledgerPostingRepository,
-      writeGuard
-    );
-
-  const controller =
-    new LedgerPostingController(commandService);
+  // Read model
+  const ledgerBalanceQuery = new LedgerBalanceQueryImpl(
+    balanceRepository,
+    calculator
+  );
 
   return {
-    controller,
+    ledgerBalanceQuery,
   };
 }
+
+export type LedgerProvider = ReturnType<typeof createLedgerProvider>;
