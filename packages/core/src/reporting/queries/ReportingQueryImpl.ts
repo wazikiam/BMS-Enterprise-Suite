@@ -4,7 +4,12 @@ import { ReportingQuery } from './ReportingQuery';
 import { SalesKPIs } from '../dtos/SalesKPIs';
 import { ARKPIs } from '../dtos/ARKPIs';
 import { IInvoiceRepository } from '../../repositories/InvoiceRepository';
-import { Invoice } from '../../domain/Invoice';
+import { Invoice, InvoiceStatus } from '../../domain/Invoice';
+
+function daysBetween(from: Date, to: Date): number {
+  const msPerDay = 1000 * 60 * 60 * 24;
+  return Math.floor((to.getTime() - from.getTime()) / msPerDay);
+}
 
 /**
  * ReportingQueryImpl provides read-only reporting and analytics.
@@ -33,7 +38,7 @@ export class ReportingQueryImpl implements ReportingQuery {
     );
 
     const paidInvoices: number = invoices.filter(
-      (invoice: Invoice) => invoice.status === 'PAID'
+      (invoice: Invoice) => invoice.status === InvoiceStatus.PAID
     ).length;
 
     const unpaidInvoices: number = totalInvoices - paidInvoices;
@@ -50,7 +55,51 @@ export class ReportingQueryImpl implements ReportingQuery {
     };
   }
 
-  async getARKPIs(_asOf: Date): Promise<ARKPIs> {
-    throw new Error('Not implemented');
+  async getARKPIs(asOf: Date): Promise<ARKPIs> {
+    const invoices: Invoice[] = await this.invoiceRepository.search({});
+
+    const openInvoices = invoices.filter((invoice) =>
+      invoice.status === InvoiceStatus.ISSUED &&
+      invoice.totals.amountDue.amount > 0
+    );
+
+    const totalOutstanding: number = openInvoices.reduce(
+      (sum: number, invoice: Invoice) =>
+        sum + invoice.totals.amountDue.amount,
+      0
+    );
+
+    const overdueInvoices = openInvoices.filter((invoice) => {
+      const dueAt = invoice.toJSON().dueAt;
+      return dueAt !== undefined && dueAt.getTime() < asOf.getTime();
+    });
+
+    const overdueAmount: number = overdueInvoices.reduce(
+      (sum: number, invoice: Invoice) =>
+        sum + invoice.totals.amountDue.amount,
+      0
+    );
+
+    const customersOverdue: number = new Set(
+      overdueInvoices.map(i => i.toJSON().parties.customerId)
+    ).size;
+
+    const averageDaysOutstanding: number =
+      openInvoices.length === 0
+        ? 0
+        : Math.round(
+            openInvoices.reduce((sum: number, invoice: Invoice) => {
+              const issuedAt = invoice.toJSON().issuedAt;
+              if (!issuedAt) return sum;
+              return sum + daysBetween(issuedAt, asOf);
+            }, 0) / openInvoices.length
+          );
+
+    return {
+      totalOutstanding,
+      overdueAmount,
+      customersOverdue,
+      averageDaysOutstanding,
+    };
   }
 }
