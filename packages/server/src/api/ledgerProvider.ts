@@ -3,51 +3,38 @@
 import { getPostgresPool } from '../db/PostgresClient';
 
 import { PostgresLedgerPostingRepository } from './PostgresLedgerPostingRepository';
-import { PostgresFinancialPeriodRepository } from './PostgresFinancialPeriodRepository';
 import { FinancialPeriodReadModel } from './FinancialPeriodReadModel';
+import { PostgresFinancialPeriodRepository } from './PostgresFinancialPeriodRepository';
+
 import { LedgerPostingWriteGuard } from './LedgerPostingWriteGuard';
 import { LedgerPostingCommandService } from './LedgerPostingCommandService';
+import { LedgerPostingController } from './LedgerPostingController';
 
-/**
- * LedgerProvider
- *
- * Application boundary for ALL ledger writes.
- *
- * Responsibilities:
- * - Compose infrastructure adapters
- * - Resolve effective financial period
- * - Enforce CLOSED-period write barrier
- *
- * NO HTTP
- * NO framework logic
- * NO domain mutation
- */
 export function createLedgerProvider() {
   const pool = getPostgresPool();
 
-  // Persistence
-  const ledgerPostingRepository = new PostgresLedgerPostingRepository(pool);
-  const financialPeriodRepository = new PostgresFinancialPeriodRepository(pool);
+  const ledgerPostingRepository =
+    new PostgresLedgerPostingRepository(pool);
 
-  // Deterministic read model (single interpretation point)
-  const financialPeriodReadModel = new FinancialPeriodReadModel(
-    financialPeriodRepository
-  );
+  const financialPeriodRepository =
+    new PostgresFinancialPeriodRepository(pool);
 
-  // Write barrier
-  const writeGuard = new LedgerPostingWriteGuard(
-    financialPeriodReadModel
-  );
+  const periodReadModel =
+    new FinancialPeriodReadModel(financialPeriodRepository);
 
-  // Command service (ONLY allowed write path)
-  const ledgerPostingService = new LedgerPostingCommandService(
-    ledgerPostingRepository,
-    writeGuard
-  );
+  const writeGuard =
+    new LedgerPostingWriteGuard(periodReadModel);
+
+  const commandService =
+    new LedgerPostingCommandService(
+      ledgerPostingRepository,
+      writeGuard
+    );
+
+  const controller =
+    new LedgerPostingController(commandService);
 
   return {
-    ledgerPostingService,
+    controller,
   };
 }
-
-export type LedgerProvider = ReturnType<typeof createLedgerProvider>;
