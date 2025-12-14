@@ -1,50 +1,65 @@
-// packages/server/src/routes/reporting/index.ts
-
 import { Router } from 'express';
-import { createReportingProvider } from '../../api/reportingProvider';
-import { GenerateSnapshotRequest } from '../../api/reportingSnapshot.dto';
+import { ReportingSnapshotType } from '@bms/core/dist/reporting/dtos/ReportingSnapshot';
+import { reportingProvider } from '../../api/reportingProvider';
 
 const router = Router();
-const reporting = createReportingProvider();
 
 /**
- * POST /reporting/snapshots
- * Generates an immutable reporting snapshot
+ * POST /api/reports/snapshots
+ * Generate a new snapshot for a given snapshot type
  */
-router.post('/snapshots', async (req, res) => {
-  const body = req.body as GenerateSnapshotRequest;
-
-  if (!body.snapshotId || !body.periodFrom || !body.periodTo || !body.asOf) {
-    return res.status(400).json({ error: 'Invalid snapshot request payload' });
-  }
-
+router.post('/snapshots', async (req, res, next) => {
   try {
-    const snapshot = await reporting.snapshotService.generate({
-      snapshotId: body.snapshotId,
-      periodFrom: new Date(body.periodFrom),
-      periodTo: new Date(body.periodTo),
-      asOf: new Date(body.asOf),
-    });
+    const { snapshotType } = req.body;
 
-    return res.status(201).json(snapshot);
-  } catch (err) {
-    return res.status(500).json({
-      error: err instanceof Error ? err.message : 'Snapshot generation failed',
-    });
+    if (!snapshotType) {
+      return res.status(400).json({
+        error: 'snapshotType is required',
+        example: {
+          snapshotType: 'SALES_KPI'
+        }
+      });
+    }
+
+    const snapshot = await reportingProvider.generateSnapshot(
+      snapshotType as ReportingSnapshotType
+    );
+
+    res.status(201).json(snapshot);
+  } catch (error) {
+    next(error);
   }
 });
 
 /**
- * GET /reporting/snapshots/latest
+ * GET /api/reports/snapshots/latest?snapshotType=SALES_KPI
+ * Retrieve the latest snapshot for a given snapshot type
  */
-router.get('/snapshots/latest', async (_req, res) => {
-  const snapshot = await reporting.snapshotRepository.getLatest();
+router.get('/snapshots/latest', async (req, res, next) => {
+  try {
+    const snapshotType = req.query.snapshotType as ReportingSnapshotType;
 
-  if (!snapshot) {
-    return res.status(404).json({ error: 'No snapshots available' });
+    if (!snapshotType) {
+      return res.status(400).json({
+        error: 'snapshotType query parameter is required',
+        example: '/api/reports/snapshots/latest?snapshotType=SALES_KPI'
+      });
+    }
+
+    const snapshot =
+      await reportingProvider.snapshotRepository.getLatest(snapshotType);
+
+    if (!snapshot) {
+      return res.status(404).json({
+        error: 'No snapshot found for given snapshotType',
+        snapshotType
+      });
+    }
+
+    res.json(snapshot);
+  } catch (error) {
+    next(error);
   }
-
-  return res.json(snapshot);
 });
 
 export default router;
