@@ -3,64 +3,41 @@
 import express from 'express';
 import cors from 'cors';
 
+// Reporting
 import reportingRouter from './routes/reporting';
-import { createLedgerProvider } from './api/ledgerProvider';
+
+// Ledger balance (read-only)
+import { createLedgerBalanceProvider } from './api/ledgerBalanceProvider';
 import { createLedgerBalanceRoutes } from './api/ledgerBalance.routes';
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT ?? 3000);
 
 app.use(cors());
 app.use(express.json());
 
-/**
- * Root
- */
-app.get('/', (_req, res) => {
-  res.json({
-    service: 'BMS Enterprise Suite API',
-    version: '1.0.0',
-  });
-});
-
-/**
- * Health
- */
 app.get('/health', (_req, res) => {
-  res.json({
-    status: 'healthy',
-    uptime: process.uptime(),
-  });
+  res.status(200).json({ status: 'ok' });
 });
 
-/**
- * Providers
- */
-const ledgerProvider = createLedgerProvider();
-
-/**
- * Routes
- */
+// Reporting API
 app.use('/api/reports', reportingRouter);
-app.use('/api/ledger', createLedgerBalanceRoutes(ledgerProvider));
 
-/**
- * 404
- */
-app.use((_req, res) => {
-  res.status(404).json({ error: 'Not found' });
-});
-
-/**
- * Error handler
- */
-app.use((err: any, _req: any, res: any, _next: any) => {
-  console.error(err);
-  res.status(500).json({ error: 'Internal server error' });
-});
+// Ledger API (READ-ONLY balance endpoint)
+const ledgerBalanceProvider = createLedgerBalanceProvider();
+app.use('/api/ledger', createLedgerBalanceRoutes(ledgerBalanceProvider));
 
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  // Keep logs simple and stable for Windows
+  console.log('╔══════════════════════════════════════════════════════════════╗');
+  console.log('║         BMS Enterprise Suite Server Started                 ║');
+  console.log('╠══════════════════════════════════════════════════════════════╣');
+  console.log('║                                                              ║');
+  console.log(`║  Server:   http://localhost:${PORT}                               ║`);
+  console.log(`║  Health:   http://localhost:${PORT}/health                       ║`);
+  console.log(`║  API:      http://localhost:${PORT}/api                          ║`);
+  console.log('║                                                              ║');
+  console.log('╚══════════════════════════════════════════════════════════════╝');
 });
 
 export { app };

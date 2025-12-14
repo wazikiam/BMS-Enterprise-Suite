@@ -2,10 +2,10 @@
 
 import { Router } from 'express';
 import { LedgerBalanceController } from './LedgerBalanceController';
-import { LedgerProvider } from './ledgerProvider';
+import { LedgerBalanceProvider } from './ledgerBalanceProvider';
 
 export function createLedgerBalanceRoutes(
-  provider: LedgerProvider
+  provider: LedgerBalanceProvider
 ): Router {
   const router = Router();
   const controller = new LedgerBalanceController(
