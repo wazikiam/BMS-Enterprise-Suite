@@ -1,5 +1,20 @@
 // packages/server/src/api/PostgresLedgerPostingRepository.ts
 
+/**
+ * INFRASTRUCTURE-ONLY MODULE
+ *
+ * This file is an infrastructure adapter.
+ *
+ * RULES:
+ * - MUST NOT be imported by packages/core
+ * - MUST NOT contain domain logic
+ * - MUST NOT enforce business rules
+ * - Persistence only (append-only)
+ *
+ * If this file is ever imported outside packages/server,
+ * that is an architectural violation.
+ */
+
 import { Pool } from 'pg';
 import { ILedgerPostingRepository } from '@bms/core/src/repositories/LedgerPostingRepository';
 import { LedgerPosting } from '@bms/core/src/domain/ledger/LedgerPosting';
@@ -7,19 +22,35 @@ import { LedgerPosting } from '@bms/core/src/domain/ledger/LedgerPosting';
 /**
  * PostgreSQL adapter for ILedgerPostingRepository.
  *
- * This adapter is:
+ * Characteristics:
  * - Append-only
  * - Deterministic
- * - Infrastructure-only
+ * - No updates
+ * - No deletes
+ * - No business rules
  *
- * It assumes postings are persisted as immutable facts.
- * Schema design is finalized later (DDL step).
+ * This class is INFRASTRUCTURE.
  */
 export class PostgresLedgerPostingRepository
   implements ILedgerPostingRepository
 {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly pool: Pool) {
+    // Defensive runtime guard: this should never execute outside server
+    if (!pool) {
+      throw new Error(
+        'PostgresLedgerPostingRepository requires a PostgreSQL pool (infrastructure context)'
+      );
+    }
+  }
 
+  /**
+   * Append a new immutable ledger posting.
+   *
+   * This method:
+   * - Assumes all invariants are already enforced upstream
+   * - Performs NO validation
+   * - Writes facts only
+   */
   async append(posting: LedgerPosting): Promise<void> {
     const sql = `
       INSERT INTO ledger_postings (
@@ -38,6 +69,13 @@ export class PostgresLedgerPostingRepository
     ]);
   }
 
+  /**
+   * Retrieve a posting by id.
+   *
+   * Deterministic:
+   * - ORDER BY created_at DESC
+   * - LIMIT 1
+   */
   async getById(postingId: string): Promise<LedgerPosting | null> {
     const sql = `
       SELECT payload
@@ -54,6 +92,13 @@ export class PostgresLedgerPostingRepository
     return res.rows[0].payload as LedgerPosting;
   }
 
+  /**
+   * Deterministic listing of postings.
+   *
+   * Ordering:
+   * - occurred_at DESC
+   * - id DESC
+   */
   async list(params?: {
     periodFrom?: Date;
     periodTo?: Date;
