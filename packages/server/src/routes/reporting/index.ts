@@ -1,10 +1,10 @@
 import { Router } from 'express';
-import { ReportingProvider } from '../../api/reportingProvider';
+import { createReportingProvider } from '../../api/reportingProvider';
 
 const router = Router();
 
-// Composition-layer instantiation
-const reportingProvider = new ReportingProvider();
+// Compose reporting provider once per process
+const reportingProvider = createReportingProvider();
 
 /**
  * POST /api/reports/snapshots
@@ -18,12 +18,13 @@ router.post('/snapshots', async (req, res, next) => {
       return res.status(400).json({
         error: 'snapshotType is required',
         example: {
-          snapshotType: 'SALES_KPI'
-        }
+          snapshotType: 'SALES_KPI',
+        },
       });
     }
 
-    const snapshot = await reportingProvider.generateSnapshot(snapshotType);
+    const snapshot =
+      await reportingProvider.snapshotService.generateSnapshot(snapshotType);
 
     res.status(201).json(snapshot);
   } catch (error) {
@@ -42,7 +43,7 @@ router.get('/snapshots/latest', async (req, res, next) => {
     if (!snapshotType) {
       return res.status(400).json({
         error: 'snapshotType query parameter is required',
-        example: '/api/reports/snapshots/latest?snapshotType=SALES_KPI'
+        example: '/api/reports/snapshots/latest?snapshotType=SALES_KPI',
       });
     }
 
@@ -52,7 +53,7 @@ router.get('/snapshots/latest', async (req, res, next) => {
     if (!snapshot) {
       return res.status(404).json({
         error: 'No snapshot found for given snapshotType',
-        snapshotType
+        snapshotType,
       });
     }
 
