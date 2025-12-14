@@ -4,10 +4,27 @@ import { SalesKPIs } from './SalesKPIs';
 import { ARKPIs } from './ARKPIs';
 
 /**
- * ReportingSnapshot represents a consistent reporting view
- * generated at a specific point in time.
+ * ReportingSnapshot is an immutable, point-in-time
+ * representation of business metrics.
+ *
+ * Snapshots are append-only and must never be mutated.
  */
 export interface ReportingSnapshot {
+  /** Stable snapshot identifier */
+  snapshotId: string;
+
+  /** Schema version for forward compatibility */
+  version: 1;
+
+  /** Time window for sales aggregation */
+  period: {
+    from: Date;
+    to: Date;
+  };
+
+  /** Point-in-time reference for AR exposure */
+  asOf: Date;
+
   /** Time when the snapshot was generated */
   generatedAt: Date;
 
