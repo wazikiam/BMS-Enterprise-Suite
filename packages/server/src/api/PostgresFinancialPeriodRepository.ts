@@ -11,33 +11,40 @@ export interface FinancialPeriodStatus {
 /**
  * Read-only repository for financial periods.
  *
- * - Append-only table
- * - Latest row per period = authoritative state
- * - NO mutation methods by design
+ * Deterministic rules:
+ * - Latest row by created_at is authoritative
+ * - Multiple rows with same max(created_at) = CORRUPTION
+ * - Missing period = not governed yet
  */
 export class PostgresFinancialPeriodRepository {
   constructor(private readonly pool: Pool) {}
 
-  /**
-   * Returns the latest state of a financial period
-   * matching the given date range.
-   */
   async getLatestForPeriod(params: {
     periodFrom: Date;
     periodTo: Date;
   }): Promise<FinancialPeriodStatus | null> {
+    /**
+     * We first compute the max(created_at) for the period,
+     * then ensure exactly ONE row exists for that timestamp.
+     */
     const sql = `
+      WITH latest AS (
+        SELECT MAX(created_at) AS max_created_at
+        FROM financial_periods
+        WHERE period_start = $1
+          AND period_end = $2
+      )
       SELECT
-        id,
-        period_start,
-        period_end,
-        state,
-        created_at
-      FROM financial_periods
-      WHERE period_start = $1
-        AND period_end = $2
-      ORDER BY created_at DESC
-      LIMIT 1
+        fp.id,
+        fp.period_start,
+        fp.period_end,
+        fp.state,
+        fp.created_at
+      FROM financial_periods fp
+      JOIN latest l
+        ON fp.created_at = l.max_created_at
+      WHERE fp.period_start = $1
+        AND fp.period_end = $2
     `;
 
     const res = await this.pool.query(sql, [
@@ -46,7 +53,16 @@ export class PostgresFinancialPeriodRepository {
     ]);
 
     if (res.rowCount === 0) {
+      // Period exists nowhere → not governed yet
       return null;
+    }
+
+    if (res.rowCount > 1) {
+      // Deterministic violation → corruption
+      throw new Error(
+        `Ambiguous financial period state detected for ` +
+          `${params.periodFrom.toISOString()} → ${params.periodTo.toISOString()}`
+      );
     }
 
     const row = res.rows[0];
