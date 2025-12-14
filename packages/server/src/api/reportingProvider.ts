@@ -3,6 +3,7 @@ import { SnapshotGenerationService } from '@bms/core/src/reporting/services/Snap
 
 import { InvoiceRepositoryAdapter } from './InvoiceRepositoryAdapter';
 import { PostgresReportingSnapshotRepository } from './PostgresReportingSnapshotRepository';
+import { PostgresFinancialPeriodRepository } from './PostgresFinancialPeriodRepository';
 import { getPostgresPool } from '../db/PostgresClient';
 
 /**
@@ -10,28 +11,38 @@ import { getPostgresPool } from '../db/PostgresClient';
  *
  * This is the SINGLE authoritative enforcement seam for
  * financial period governance during snapshot generation.
- *
- * For now, it explicitly allows generation.
- * Future steps will enforce CLOSED period rejection here.
  */
 export interface PeriodLockGuard {
   assertSnapshotGenerationAllowed(params: {
     periodFrom: Date;
     periodTo: Date;
     asOf: Date;
-  }): void;
+  }): Promise<void>;
 }
 
 /**
- * Default guard (Week 14 Step 2).
- *
- * This guard is explicit and intentional.
- * It exists to prevent bypass and to anchor enforcement.
+ * Enforces CLOSED-period rejection using persisted financial periods.
  */
-class AllowAllPeriodLockGuard implements PeriodLockGuard {
-  assertSnapshotGenerationAllowed(): void {
-    // Intentionally allowed.
-    // CLOSED period enforcement will be added once periods are persisted.
+class DatabaseBackedPeriodLockGuard implements PeriodLockGuard {
+  constructor(
+    private readonly financialPeriodRepository: PostgresFinancialPeriodRepository
+  ) {}
+
+  async assertSnapshotGenerationAllowed(params: {
+    periodFrom: Date;
+    periodTo: Date;
+    asOf: Date;
+  }): Promise<void> {
+    const latest = await this.financialPeriodRepository.getLatestForPeriod({
+      periodFrom: params.periodFrom,
+      periodTo: params.periodTo,
+    });
+
+    if (latest && latest.state === 'CLOSED') {
+      throw new Error(
+        `Financial period ${params.periodFrom.toISOString()} → ${params.periodTo.toISOString()} is CLOSED`
+      );
+    }
   }
 }
 
@@ -43,26 +54,24 @@ class AllowAllPeriodLockGuard implements PeriodLockGuard {
  * Governance rules MUST be enforced here.
  */
 export function createReportingProvider() {
-  const invoiceRepository = new InvoiceRepositoryAdapter();
+  const pool = getPostgresPool();
 
+  const invoiceRepository = new InvoiceRepositoryAdapter();
   const reportingQuery = new ReportingQueryImpl(invoiceRepository);
 
-  const snapshotRepository = new PostgresReportingSnapshotRepository(
-    getPostgresPool()
-  );
+  const snapshotRepository = new PostgresReportingSnapshotRepository(pool);
 
-  const periodLockGuard: PeriodLockGuard = new AllowAllPeriodLockGuard();
+  const financialPeriodRepository =
+    new PostgresFinancialPeriodRepository(pool);
+
+  const periodLockGuard: PeriodLockGuard =
+    new DatabaseBackedPeriodLockGuard(financialPeriodRepository);
 
   const snapshotService = new SnapshotGenerationService(
     reportingQuery,
     snapshotRepository
   );
 
-  /**
-   * Guarded snapshot generation.
-   *
-   * ALL snapshot generation MUST pass through this function.
-   */
   const guardedSnapshotService = {
     async generate(params: {
       snapshotId: string;
@@ -70,7 +79,7 @@ export function createReportingProvider() {
       periodTo: Date;
       asOf: Date;
     }) {
-      periodLockGuard.assertSnapshotGenerationAllowed({
+      await periodLockGuard.assertSnapshotGenerationAllowed({
         periodFrom: params.periodFrom,
         periodTo: params.periodTo,
         asOf: params.asOf,
