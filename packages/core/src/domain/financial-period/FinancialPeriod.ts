@@ -7,7 +7,7 @@ import {
 /**
  * FinancialPeriod is a DOMAIN AGGREGATE.
  *
- * It defines GOVERNANCE over time, not storage or behavior enforcement.
+ * It governs LEGAL accounting time.
  * All transitions are explicit and immutable.
  */
 export class FinancialPeriod {
@@ -49,29 +49,13 @@ export class FinancialPeriod {
   }
 
   /**
-   * Transition: OPEN → CLOSING
+   * Transition: OPEN → CLOSED
    */
-  closeForProcessing(): FinancialPeriod {
-    if (this.state !== FinancialPeriodState.OPEN) {
-      throw new InvalidFinancialPeriodTransitionError(
-        this.state,
-        FinancialPeriodState.CLOSING
-      );
-    }
-
-    return new FinancialPeriod({
-      id: this.id,
-      periodStart: this.periodStart,
-      periodEnd: this.periodEnd,
-      state: FinancialPeriodState.CLOSING,
-    });
-  }
-
-  /**
-   * Transition: CLOSING → CLOSED
-   */
-  finalize(): FinancialPeriod {
-    if (this.state !== FinancialPeriodState.CLOSING) {
+  close(): FinancialPeriod {
+    if (
+      this.state !== FinancialPeriodState.OPEN &&
+      this.state !== FinancialPeriodState.REOPENED
+    ) {
       throw new InvalidFinancialPeriodTransitionError(
         this.state,
         FinancialPeriodState.CLOSED
@@ -83,6 +67,25 @@ export class FinancialPeriod {
       periodStart: this.periodStart,
       periodEnd: this.periodEnd,
       state: FinancialPeriodState.CLOSED,
+    });
+  }
+
+  /**
+   * Transition: CLOSED → REOPENED
+   */
+  reopen(): FinancialPeriod {
+    if (this.state !== FinancialPeriodState.CLOSED) {
+      throw new InvalidFinancialPeriodTransitionError(
+        this.state,
+        FinancialPeriodState.REOPENED
+      );
+    }
+
+    return new FinancialPeriod({
+      id: this.id,
+      periodStart: this.periodStart,
+      periodEnd: this.periodEnd,
+      state: FinancialPeriodState.REOPENED,
     });
   }
 }

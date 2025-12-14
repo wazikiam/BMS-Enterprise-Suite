@@ -1,5 +1,11 @@
+/**
+ * Canonical financial period states.
+ *
+ * These represent LEGAL / ACCOUNTING state,
+ * not operational workflow.
+ */
 export enum FinancialPeriodState {
   OPEN = 'OPEN',
-  CLOSING = 'CLOSING',
   CLOSED = 'CLOSED',
+  REOPENED = 'REOPENED',
 }
