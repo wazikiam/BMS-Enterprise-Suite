@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { randomUUID } from 'crypto';
 import { createReportingProvider } from '../../api/reportingProvider';
 
 const router = Router();
@@ -8,23 +9,24 @@ const reportingProvider = createReportingProvider();
 
 /**
  * POST /api/reports/snapshots
- * Generate a new snapshot for a given snapshot type
+ *
+ * For now, this endpoint generates a SALES_KPI snapshot
+ * for the current month.
  */
 router.post('/snapshots', async (req, res, next) => {
   try {
-    const { snapshotType } = req.body as { snapshotType?: string };
+    const now = new Date();
 
-    if (!snapshotType) {
-      return res.status(400).json({
-        error: 'snapshotType is required',
-        example: {
-          snapshotType: 'SALES_KPI',
-        },
-      });
-    }
+    const periodFrom = new Date(now.getFullYear(), now.getMonth(), 1);
+    const periodTo = new Date(now.getFullYear(), now.getMonth() + 1, 0);
 
-    const snapshot =
-      await reportingProvider.snapshotService.generateSnapshot(snapshotType);
+    const snapshot = await reportingProvider.snapshotService.generate({
+      snapshotId: randomUUID(),
+      periodFrom,
+      periodTo,
+      asOf: now,
+      now,
+    });
 
     res.status(201).json(snapshot);
   } catch (error) {
@@ -34,7 +36,8 @@ router.post('/snapshots', async (req, res, next) => {
 
 /**
  * GET /api/reports/snapshots/latest?snapshotType=SALES_KPI
- * Retrieve the latest snapshot for a given snapshot type
+ *
+ * Snapshot type is currently informational only.
  */
 router.get('/snapshots/latest', async (req, res, next) => {
   try {
