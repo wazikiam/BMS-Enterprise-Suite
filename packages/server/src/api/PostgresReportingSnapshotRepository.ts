@@ -1,43 +1,41 @@
 import crypto from 'crypto';
 import { Pool } from 'pg';
 
-import {
-  IReportingSnapshotRepository,
-  ReportingSnapshotListFilter,
-} from '@bms/core/src/reporting/repositories/ReportingSnapshotRepository';
-
-import {
-  ReportingSnapshot,
-  ReportingSnapshotType,
-} from '@bms/core/src/reporting/dtos/ReportingSnapshot';
+import { IReportingSnapshotRepository } from '@bms/core/src/reporting/repositories/ReportingSnapshotRepository';
+import { ReportingSnapshot } from '@bms/core/src/reporting/dtos/ReportingSnapshot';
 
 /**
- * PostgreSQL-backed snapshot repository.
- *
- * Constraints:
- * - Append-only persistence (DB also forbids UPDATE/DELETE).
- * - No infrastructure leakage into core.
- * - Deterministic checksum for audit integrity.
- * - Parameterized SQL only.
+ * Persistence projection for reporting snapshots.
+ * This is NOT the domain model.
  */
+type PersistedReportingSnapshot = {
+  id: string;
+  snapshotType: string;
+  snapshotVersion: number;
+  periodStart: string;
+  periodEnd: string;
+  payload: unknown;
+  checksum: string;
+  createdAt?: string;
+};
+
 export class PostgresReportingSnapshotRepository
   implements IReportingSnapshotRepository
 {
   constructor(private readonly pool: Pool) {}
 
   async append(snapshot: ReportingSnapshot): Promise<void> {
-    const id = snapshot.id ?? crypto.randomUUID();
+    const id = crypto.randomUUID();
 
-    const checksum =
-      snapshot.checksum ??
-      this.computeChecksum({
-        id,
-        snapshotType: snapshot.snapshotType,
-        snapshotVersion: snapshot.snapshotVersion,
-        periodStart: snapshot.periodStart,
-        periodEnd: snapshot.periodEnd,
-        payload: snapshot.payload,
-      });
+    const persisted: PersistedReportingSnapshot = {
+      id,
+      snapshotType: 'SALES_KPI',
+      snapshotVersion: snapshot.version,
+      periodStart: snapshot.period.from.toISOString().slice(0, 10),
+      periodEnd: snapshot.period.to.toISOString().slice(0, 10),
+      payload: snapshot,
+      checksum: this.computeChecksum(snapshot),
+    };
 
     const sql = `
       INSERT INTO reporting_snapshots
@@ -47,29 +45,35 @@ export class PostgresReportingSnapshotRepository
     `;
 
     const params = [
-      id,
-      snapshot.snapshotType,
-      snapshot.snapshotVersion,
-      snapshot.periodStart,
-      snapshot.periodEnd,
-      JSON.stringify(snapshot.payload),
-      checksum,
+      persisted.id,
+      persisted.snapshotType,
+      persisted.snapshotVersion,
+      persisted.periodStart,
+      persisted.periodEnd,
+      JSON.stringify(persisted.payload),
+      persisted.checksum,
     ];
 
     await this.pool.query(sql, params);
   }
 
+  async getLatest(_snapshotType: string): Promise<ReportingSnapshot | null> {
+    const sql = `
+      SELECT payload
+      FROM reporting_snapshots
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+
+    const res = await this.pool.query(sql);
+    if (res.rowCount === 0) return null;
+
+    return res.rows[0].payload as ReportingSnapshot;
+  }
+
   async getById(id: string): Promise<ReportingSnapshot | null> {
     const sql = `
-      SELECT
-        id,
-        snapshot_type,
-        snapshot_version,
-        period_start,
-        period_end,
-        payload,
-        checksum,
-        created_at
+      SELECT payload
       FROM reporting_snapshots
       WHERE id = $1
       LIMIT 1
@@ -78,127 +82,26 @@ export class PostgresReportingSnapshotRepository
     const res = await this.pool.query(sql, [id]);
     if (res.rowCount === 0) return null;
 
-    return this.mapRowToSnapshot(res.rows[0]);
+    return res.rows[0].payload as ReportingSnapshot;
   }
 
-  async getLatest(
-    snapshotType: ReportingSnapshotType
-  ): Promise<ReportingSnapshot | null> {
+  async list(): Promise<ReportingSnapshot[]> {
     const sql = `
-      SELECT
-        id,
-        snapshot_type,
-        snapshot_version,
-        period_start,
-        period_end,
-        payload,
-        checksum,
-        created_at
+      SELECT payload
       FROM reporting_snapshots
-      WHERE snapshot_type = $1
       ORDER BY created_at DESC
-      LIMIT 1
+      LIMIT 100
     `;
 
-    const res = await this.pool.query(sql, [snapshotType]);
-    if (res.rowCount === 0) return null;
-
-    return this.mapRowToSnapshot(res.rows[0]);
+    const res = await this.pool.query(sql);
+    return res.rows.map((r) => r.payload as ReportingSnapshot);
   }
 
-  async list(
-    filter: ReportingSnapshotListFilter
-  ): Promise<ReportingSnapshot[]> {
-    const limit = this.normalizeLimit(filter?.limit);
-
-    const clauses: string[] = [];
-    const params: any[] = [];
-    let i = 1;
-
-    if (filter?.snapshotType) {
-      clauses.push(`snapshot_type = $${i++}`);
-      params.push(filter.snapshotType);
-    }
-
-    if (filter?.periodStartFrom) {
-      clauses.push(`period_start >= $${i++}`);
-      params.push(filter.periodStartFrom);
-    }
-
-    if (filter?.periodEndTo) {
-      clauses.push(`period_end <= $${i++}`);
-      params.push(filter.periodEndTo);
-    }
-
-    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-
-    const sql = `
-      SELECT
-        id,
-        snapshot_type,
-        snapshot_version,
-        period_start,
-        period_end,
-        payload,
-        checksum,
-        created_at
-      FROM reporting_snapshots
-      ${where}
-      ORDER BY created_at DESC
-      LIMIT $${i++}
-    `;
-
-    params.push(limit);
-
-    const res = await this.pool.query(sql, params);
-    return res.rows.map((r) => this.mapRowToSnapshot(r));
-  }
-
-  private normalizeLimit(value: unknown): number {
-    const n = typeof value === 'number' ? value : Number(value);
-    if (!Number.isFinite(n) || n <= 0) return 50;
-    return Math.min(Math.floor(n), 500);
-  }
-
-  private computeChecksum(input: {
-    id: string;
-    snapshotType: ReportingSnapshotType;
-    snapshotVersion: number;
-    periodStart: string;
-    periodEnd: string;
-    payload: unknown;
-  }): string {
-    const material = JSON.stringify({
-      id: input.id,
-      snapshotType: input.snapshotType,
-      snapshotVersion: input.snapshotVersion,
-      periodStart: input.periodStart,
-      periodEnd: input.periodEnd,
-      payload: input.payload,
-    });
-
+  private computeChecksum(snapshot: ReportingSnapshot): string {
+    const material = JSON.stringify(snapshot);
     return crypto
       .createHash('sha256')
       .update(material, 'utf8')
       .digest('hex');
-  }
-
-  private mapRowToSnapshot(row: any): ReportingSnapshot {
-    return {
-      id: row.id,
-      snapshotType: row.snapshot_type as ReportingSnapshotType,
-      snapshotVersion: Number(row.snapshot_version),
-      periodStart: this.toIsoDate(row.period_start),
-      periodEnd: this.toIsoDate(row.period_end),
-      payload: row.payload,
-      checksum: String(row.checksum),
-      createdAt: new Date(row.created_at).toISOString(),
-    };
-  }
-
-  private toIsoDate(value: any): string {
-    if (typeof value === 'string') return value;
-    if (value instanceof Date) return value.toISOString().slice(0, 10);
-    return String(value);
   }
 }
