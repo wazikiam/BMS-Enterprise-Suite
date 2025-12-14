@@ -4,7 +4,8 @@ import { ReportingQueryImpl } from '@bms/core/src/reporting/queries/ReportingQue
 import { SnapshotGenerationService } from '@bms/core/src/reporting/services/SnapshotGenerationService';
 
 import { InvoiceRepositoryAdapter } from './InvoiceRepositoryAdapter';
-import { InMemoryReportingSnapshotRepository } from './InMemoryReportingSnapshotRepository';
+import { PostgresReportingSnapshotRepository } from './PostgresReportingSnapshotRepository';
+import { getPostgresPool } from '../db/PostgresClient';
 
 /**
  * Reporting provider composes reporting read models
@@ -17,7 +18,9 @@ export function createReportingProvider() {
 
   const reportingQuery = new ReportingQueryImpl(invoiceRepository);
 
-  const snapshotRepository = new InMemoryReportingSnapshotRepository();
+  const snapshotRepository = new PostgresReportingSnapshotRepository(
+    getPostgresPool()
+  );
 
   const snapshotService = new SnapshotGenerationService(
     reportingQuery,
