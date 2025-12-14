@@ -5,38 +5,21 @@ import { IReportingSnapshotRepository } from '@bms/core/src/reporting/repositori
 import { ReportingSnapshot } from '@bms/core/src/reporting/dtos/ReportingSnapshot';
 
 /**
- * Persistence projection for reporting snapshots.
- * This is NOT the domain model.
+ * PostgreSQL-backed implementation of IReportingSnapshotRepository.
+ *
+ * This repository is:
+ * - append-only
+ * - period-based
+ * - generation-order deterministic
+ *
+ * It persists the FULL domain snapshot as JSONB.
  */
-type PersistedReportingSnapshot = {
-  id: string;
-  snapshotType: string;
-  snapshotVersion: number;
-  periodStart: string;
-  periodEnd: string;
-  payload: unknown;
-  checksum: string;
-  createdAt?: string;
-};
-
 export class PostgresReportingSnapshotRepository
   implements IReportingSnapshotRepository
 {
   constructor(private readonly pool: Pool) {}
 
   async append(snapshot: ReportingSnapshot): Promise<void> {
-    const id = crypto.randomUUID();
-
-    const persisted: PersistedReportingSnapshot = {
-      id,
-      snapshotType: 'SALES_KPI',
-      snapshotVersion: snapshot.version,
-      periodStart: snapshot.period.from.toISOString().slice(0, 10),
-      periodEnd: snapshot.period.to.toISOString().slice(0, 10),
-      payload: snapshot,
-      checksum: this.computeChecksum(snapshot),
-    };
-
     const sql = `
       INSERT INTO reporting_snapshots
         (id, snapshot_type, snapshot_version, period_start, period_end, payload, checksum, created_at, superseded_by)
@@ -44,34 +27,23 @@ export class PostgresReportingSnapshotRepository
         ($1, $2, $3, $4, $5, $6::jsonb, $7, now(), NULL)
     `;
 
+    const payloadJson = JSON.stringify(snapshot);
+    const checksum = this.computeChecksum(payloadJson);
+
     const params = [
-      persisted.id,
-      persisted.snapshotType,
-      persisted.snapshotVersion,
-      persisted.periodStart,
-      persisted.periodEnd,
-      JSON.stringify(persisted.payload),
-      persisted.checksum,
+      snapshot.snapshotId,
+      'REPORTING',
+      snapshot.version,
+      snapshot.period.from,
+      snapshot.period.to,
+      payloadJson,
+      checksum,
     ];
 
     await this.pool.query(sql, params);
   }
 
-  async getLatest(_snapshotType: string): Promise<ReportingSnapshot | null> {
-    const sql = `
-      SELECT payload
-      FROM reporting_snapshots
-      ORDER BY created_at DESC
-      LIMIT 1
-    `;
-
-    const res = await this.pool.query(sql);
-    if (res.rowCount === 0) return null;
-
-    return res.rows[0].payload as ReportingSnapshot;
-  }
-
-  async getById(id: string): Promise<ReportingSnapshot | null> {
+  async getById(snapshotId: string): Promise<ReportingSnapshot | null> {
     const sql = `
       SELECT payload
       FROM reporting_snapshots
@@ -79,29 +51,77 @@ export class PostgresReportingSnapshotRepository
       LIMIT 1
     `;
 
-    const res = await this.pool.query(sql, [id]);
+    const res = await this.pool.query(sql, [snapshotId]);
     if (res.rowCount === 0) return null;
 
     return res.rows[0].payload as ReportingSnapshot;
   }
 
-  async list(): Promise<ReportingSnapshot[]> {
+  async getLatest(params: {
+    periodFrom: Date;
+    periodTo: Date;
+    asOf: Date;
+  }): Promise<ReportingSnapshot | null> {
     const sql = `
       SELECT payload
       FROM reporting_snapshots
+      WHERE period_start = $1
+        AND period_end = $2
       ORDER BY created_at DESC
-      LIMIT 100
+      LIMIT 1
     `;
 
-    const res = await this.pool.query(sql);
+    const res = await this.pool.query(sql, [
+      params.periodFrom,
+      params.periodTo,
+    ]);
+
+    if (res.rowCount === 0) return null;
+
+    return res.rows[0].payload as ReportingSnapshot;
+  }
+
+  async list(params?: {
+    fromGeneratedAt?: Date;
+    toGeneratedAt?: Date;
+    limit?: number;
+  }): Promise<ReportingSnapshot[]> {
+    const limit = Math.min(params?.limit ?? 50, 500);
+
+    const clauses: string[] = [];
+    const values: any[] = [];
+    let i = 1;
+
+    if (params?.fromGeneratedAt) {
+      clauses.push(`created_at >= $${i++}`);
+      values.push(params.fromGeneratedAt);
+    }
+
+    if (params?.toGeneratedAt) {
+      clauses.push(`created_at <= $${i++}`);
+      values.push(params.toGeneratedAt);
+    }
+
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+
+    const sql = `
+      SELECT payload
+      FROM reporting_snapshots
+      ${where}
+      ORDER BY created_at DESC
+      LIMIT $${i}
+    `;
+
+    values.push(limit);
+
+    const res = await this.pool.query(sql, values);
     return res.rows.map((r) => r.payload as ReportingSnapshot);
   }
 
-  private computeChecksum(snapshot: ReportingSnapshot): string {
-    const material = JSON.stringify(snapshot);
+  private computeChecksum(payloadJson: string): string {
     return crypto
       .createHash('sha256')
-      .update(material, 'utf8')
+      .update(payloadJson, 'utf8')
       .digest('hex');
   }
 }
