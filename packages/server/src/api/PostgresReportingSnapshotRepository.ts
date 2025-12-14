@@ -6,32 +6,35 @@ import {
   ReportingSnapshot,
   ReportingSnapshotType,
   ReportingSnapshotListFilter,
-} from './reportingSnapshot.dto';
+} from '@bms/core/src/reporting/repositories/ReportingSnapshotRepository';
 
 /**
  * PostgreSQL-backed snapshot repository.
  *
  * Constraints:
  * - Append-only persistence (DB also forbids UPDATE/DELETE).
- * - No infrastructure leakage into core (this lives in server).
+ * - No infrastructure leakage into core.
  * - Deterministic checksum for audit integrity.
  * - Parameterized SQL only.
  */
-export class PostgresReportingSnapshotRepository implements IReportingSnapshotRepository {
+export class PostgresReportingSnapshotRepository
+  implements IReportingSnapshotRepository
+{
   constructor(private readonly pool: Pool) {}
 
   async append(snapshot: ReportingSnapshot): Promise<void> {
-    // Defensive: ensure we never persist snapshots without identity/checksum.
     const id = snapshot.id ?? crypto.randomUUID();
 
-    const checksum = snapshot.checksum ?? this.computeChecksum({
-      id,
-      snapshotType: snapshot.snapshotType,
-      snapshotVersion: snapshot.snapshotVersion,
-      periodStart: snapshot.periodStart,
-      periodEnd: snapshot.periodEnd,
-      payload: snapshot.payload,
-    });
+    const checksum =
+      snapshot.checksum ??
+      this.computeChecksum({
+        id,
+        snapshotType: snapshot.snapshotType,
+        snapshotVersion: snapshot.snapshotVersion,
+        periodStart: snapshot.periodStart,
+        periodEnd: snapshot.periodEnd,
+        payload: snapshot.payload,
+      });
 
     const sql = `
       INSERT INTO reporting_snapshots
@@ -75,7 +78,9 @@ export class PostgresReportingSnapshotRepository implements IReportingSnapshotRe
     return this.mapRowToSnapshot(res.rows[0]);
   }
 
-  async getLatest(snapshotType: ReportingSnapshotType): Promise<ReportingSnapshot | null> {
+  async getLatest(
+    snapshotType: ReportingSnapshotType
+  ): Promise<ReportingSnapshot | null> {
     const sql = `
       SELECT
         id,
@@ -98,8 +103,9 @@ export class PostgresReportingSnapshotRepository implements IReportingSnapshotRe
     return this.mapRowToSnapshot(res.rows[0]);
   }
 
-  async list(filter: ReportingSnapshotListFilter): Promise<ReportingSnapshot[]> {
-    // Bounded listing required for enterprise safety.
+  async list(
+    filter: ReportingSnapshotListFilter
+  ): Promise<ReportingSnapshot[]> {
     const limit = this.normalizeLimit(filter?.limit);
 
     const clauses: string[] = [];
@@ -148,7 +154,6 @@ export class PostgresReportingSnapshotRepository implements IReportingSnapshotRe
   private normalizeLimit(value: unknown): number {
     const n = typeof value === 'number' ? value : Number(value);
     if (!Number.isFinite(n) || n <= 0) return 50;
-    // Hard cap to prevent accidental table scans or API abuse.
     return Math.min(Math.floor(n), 500);
   }
 
@@ -160,7 +165,6 @@ export class PostgresReportingSnapshotRepository implements IReportingSnapshotRe
     periodEnd: string;
     payload: unknown;
   }): string {
-    // Deterministic hashing material. Keep ordering stable.
     const material = JSON.stringify({
       id: input.id,
       snapshotType: input.snapshotType,
@@ -170,7 +174,10 @@ export class PostgresReportingSnapshotRepository implements IReportingSnapshotRe
       payload: input.payload,
     });
 
-    return crypto.createHash('sha256').update(material, 'utf8').digest('hex');
+    return crypto
+      .createHash('sha256')
+      .update(material, 'utf8')
+      .digest('hex');
   }
 
   private mapRowToSnapshot(row: any): ReportingSnapshot {
@@ -187,7 +194,6 @@ export class PostgresReportingSnapshotRepository implements IReportingSnapshotRe
   }
 
   private toIsoDate(value: any): string {
-    // pg returns DATE as string (YYYY-MM-DD) in most configs, but be defensive.
     if (typeof value === 'string') return value;
     if (value instanceof Date) return value.toISOString().slice(0, 10);
     return String(value);
