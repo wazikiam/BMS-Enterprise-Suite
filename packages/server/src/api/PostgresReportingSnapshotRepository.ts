@@ -3,10 +3,13 @@ import { Pool } from 'pg';
 
 import {
   IReportingSnapshotRepository,
-  ReportingSnapshot,
-  ReportingSnapshotType,
   ReportingSnapshotListFilter,
 } from '@bms/core/src/reporting/repositories/ReportingSnapshotRepository';
+
+import {
+  ReportingSnapshot,
+  ReportingSnapshotType,
+} from '@bms/core/src/reporting/dtos/ReportingSnapshot';
 
 /**
  * PostgreSQL-backed snapshot repository.
