@@ -8,10 +8,13 @@ import { ReportingSnapshot } from '@bms/core/src/reporting/dtos/ReportingSnapsho
  * PostgreSQL-backed implementation of IReportingSnapshotRepository.
  *
  * Invariants:
- * - Append-only persistence
- * - No UPDATE / DELETE
- * - Supersession is expressed via insert-time linkage
+ * - Append-only persistence (no UPDATE / DELETE)
+ * - Supersession is expressed via insert-time linkage (superseded_by)
  * - Reads must be deterministic and auditable
+ *
+ * Retention:
+ * - Retention is query-level visibility control ONLY
+ * - Data is never deleted or mutated
  */
 export class PostgresReportingSnapshotRepository
   implements IReportingSnapshotRepository
@@ -104,6 +107,72 @@ export class PostgresReportingSnapshotRepository
     if (res.rowCount === 0) return null;
 
     return res.rows[0].payload as ReportingSnapshot;
+  }
+
+  /**
+   * Retention-aware listing of EFFECTIVE snapshots only.
+   *
+   * Semantics:
+   * - Visibility control only (NO deletion, NO mutation)
+   * - Only effective snapshots participate: superseded_by IS NULL
+   * - Bounded by asOf: created_at <= asOf
+   * - Optional time retention: created_at >= minCreatedAt
+   * - Optional count retention: LIMIT maxCount (capped)
+   * - Deterministic ordering: created_at DESC, id DESC
+   *
+   * Not part of core contract yet; intentionally repository-specific for Week 13.
+   */
+  async listEffectiveWithRetention(params: {
+    periodFrom: Date;
+    periodTo: Date;
+    asOf: Date;
+    maxCount?: number; // count-based retention (visibility)
+    maxAgeDays?: number; // time-based retention (visibility), relative to asOf
+  }): Promise<ReportingSnapshot[]> {
+    const maxCount = Math.min(params.maxCount ?? 50, 500);
+
+    // Compute threshold in application code for deterministic behavior across DB configs/timezones.
+    let minCreatedAt: Date | null = null;
+    if (params.maxAgeDays !== undefined && params.maxAgeDays !== null) {
+      if (!Number.isFinite(params.maxAgeDays) || params.maxAgeDays <= 0) {
+        throw new Error('maxAgeDays must be a positive finite number when provided');
+      }
+      const ms = Math.floor(params.maxAgeDays * 24 * 60 * 60 * 1000);
+      minCreatedAt = new Date(params.asOf.getTime() - ms);
+    }
+
+    const clauses: string[] = [];
+    const values: any[] = [];
+    let i = 1;
+
+    clauses.push(`period_start = $${i++}`);
+    values.push(params.periodFrom);
+
+    clauses.push(`period_end = $${i++}`);
+    values.push(params.periodTo);
+
+    clauses.push(`created_at <= $${i++}`);
+    values.push(params.asOf);
+
+    clauses.push(`superseded_by IS NULL`);
+
+    if (minCreatedAt) {
+      clauses.push(`created_at >= $${i++}`);
+      values.push(minCreatedAt);
+    }
+
+    const sql = `
+      SELECT payload
+      FROM reporting_snapshots
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY created_at DESC, id DESC
+      LIMIT $${i}
+    `;
+
+    values.push(maxCount);
+
+    const res = await this.pool.query(sql, values);
+    return res.rows.map((r) => r.payload as ReportingSnapshot);
   }
 
   async list(params?: {
