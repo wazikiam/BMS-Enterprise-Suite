@@ -7,12 +7,11 @@ import { ReportingSnapshot } from '@bms/core/src/reporting/dtos/ReportingSnapsho
 /**
  * PostgreSQL-backed implementation of IReportingSnapshotRepository.
  *
- * This repository is:
- * - append-only
- * - period-based
- * - generation-order deterministic
- *
- * It persists the FULL domain snapshot as JSONB.
+ * Invariants:
+ * - Append-only persistence
+ * - No UPDATE / DELETE
+ * - Supersession is expressed via insert-time linkage
+ * - Reads must be deterministic and auditable
  */
 export class PostgresReportingSnapshotRepository
   implements IReportingSnapshotRepository
@@ -22,7 +21,17 @@ export class PostgresReportingSnapshotRepository
   async append(snapshot: ReportingSnapshot): Promise<void> {
     const sql = `
       INSERT INTO reporting_snapshots
-        (id, snapshot_type, snapshot_version, period_start, period_end, payload, checksum, created_at, superseded_by)
+        (
+          id,
+          snapshot_type,
+          snapshot_version,
+          period_start,
+          period_end,
+          payload,
+          checksum,
+          created_at,
+          superseded_by
+        )
       VALUES
         ($1, $2, $3, $4, $5, $6::jsonb, $7, now(), NULL)
     `;
@@ -57,6 +66,17 @@ export class PostgresReportingSnapshotRepository
     return res.rows[0].payload as ReportingSnapshot;
   }
 
+  /**
+   * Resolves the latest EFFECTIVE snapshot.
+   *
+   * Deterministic rules:
+   * - Must not be superseded
+   * - Must be generated at or before `asOf`
+   * - Ordered by generation time, then ID as tie-breaker
+   *
+   * This method NEVER traverses supersession chains.
+   * Supersession correctness is enforced at write-time.
+   */
   async getLatest(params: {
     periodFrom: Date;
     periodTo: Date;
@@ -66,14 +86,19 @@ export class PostgresReportingSnapshotRepository
       SELECT payload
       FROM reporting_snapshots
       WHERE period_start = $1
-        AND period_end = $2
-      ORDER BY created_at DESC
+        AND period_end   = $2
+        AND created_at <= $3
+        AND superseded_by IS NULL
+      ORDER BY
+        created_at DESC,
+        id DESC
       LIMIT 1
     `;
 
     const res = await this.pool.query(sql, [
       params.periodFrom,
       params.periodTo,
+      params.asOf,
     ]);
 
     if (res.rowCount === 0) return null;
@@ -108,7 +133,7 @@ export class PostgresReportingSnapshotRepository
       SELECT payload
       FROM reporting_snapshots
       ${where}
-      ORDER BY created_at DESC
+      ORDER BY created_at DESC, id DESC
       LIMIT $${i}
     `;
 
