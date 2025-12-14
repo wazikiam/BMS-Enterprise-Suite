@@ -1,112 +1,50 @@
 // packages/server/src/routes/reporting/index.ts
 
-import { Router, Request, Response } from 'express';
-import { createReportingQuery } from '../../api/reportingProvider';
+import { Router } from 'express';
+import { createReportingProvider } from '../../api/reportingProvider';
+import { GenerateSnapshotRequest } from '../../api/reportingSnapshot.dto';
 
-type ErrorResponse = {
-  error: {
-    code: 'INVALID_REQUEST' | 'INTERNAL_ERROR';
-    message: string;
-    details?: {
-      field: string;
-      reason: string;
-    };
-  };
-};
-
-function badRequest(
-  res: Response,
-  field: string,
-  reason: string,
-  message = 'Invalid request'
-): Response<ErrorResponse> {
-  return res.status(400).json({
-    error: {
-      code: 'INVALID_REQUEST',
-      message,
-      details: { field, reason },
-    },
-  });
-}
-
-function internalError(res: Response): Response<ErrorResponse> {
-  return res.status(500).json({
-    error: {
-      code: 'INTERNAL_ERROR',
-      message: 'Internal server error',
-    },
-  });
-}
-
-const MAX_RANGE_DAYS = 366;
-const MS_PER_DAY = 1000 * 60 * 60 * 24;
-
-export const reportingRouter = Router();
+const router = Router();
+const reporting = createReportingProvider();
 
 /**
- * GET /reporting/kpis
- * Query params:
- *  - from (ISO date)
- *  - to (ISO date)
+ * POST /reporting/snapshots
+ * Generates an immutable reporting snapshot
  */
-reportingRouter.get('/kpis', async (req: Request, res: Response) => {
+router.post('/snapshots', async (req, res) => {
+  const body = req.body as GenerateSnapshotRequest;
+
+  if (!body.snapshotId || !body.periodFrom || !body.periodTo || !body.asOf) {
+    return res.status(400).json({ error: 'Invalid snapshot request payload' });
+  }
+
   try {
-    const { from, to } = req.query;
-
-    // 1) Presence
-    if (!from) {
-      return badRequest(res, 'from', 'missing', '"from" query parameter is required');
-    }
-    if (!to) {
-      return badRequest(res, 'to', 'missing', '"to" query parameter is required');
-    }
-
-    // 2) Format
-    const fromDate = new Date(String(from));
-    if (isNaN(fromDate.getTime())) {
-      return badRequest(res, 'from', 'invalid_format', '"from" must be a valid ISO date');
-    }
-
-    const toDate = new Date(String(to));
-    if (isNaN(toDate.getTime())) {
-      return badRequest(res, 'to', 'invalid_format', '"to" must be a valid ISO date');
-    }
-
-    // 3) Logical consistency
-    if (fromDate.getTime() > toDate.getTime()) {
-      return badRequest(res, 'from', 'after_to', '"from" must be before or equal to "to"');
-    }
-
-    // 4) Range safety
-    const rangeDays = Math.ceil(
-      (toDate.getTime() - fromDate.getTime()) / MS_PER_DAY
-    );
-
-    if (rangeDays > MAX_RANGE_DAYS) {
-      return badRequest(
-        res,
-        'range',
-        'too_large',
-        `Date range must not exceed ${MAX_RANGE_DAYS} days`
-      );
-    }
-
-    const reportingQuery = createReportingQuery();
-
-    const sales = await reportingQuery.getSalesKPIs({
-      from: fromDate,
-      to: toDate,
+    const snapshot = await reporting.snapshotService.generate({
+      snapshotId: body.snapshotId,
+      periodFrom: new Date(body.periodFrom),
+      periodTo: new Date(body.periodTo),
+      asOf: new Date(body.asOf),
     });
 
-    const ar = await reportingQuery.getARKPIs(new Date());
-
-    return res.json({
-      generatedAt: new Date().toISOString(),
-      sales,
-      accountsReceivable: ar,
-    });
+    return res.status(201).json(snapshot);
   } catch (err) {
-    console.error('[Reporting API]', err);
-    return internalError(res);
+    return res.status(500).json({
+      error: err instanceof Error ? err.message : 'Snapshot generation failed',
+    });
   }
 });
+
+/**
+ * GET /reporting/snapshots/latest
+ */
+router.get('/snapshots/latest', async (_req, res) => {
+  const snapshot = await reporting.snapshotRepository.getLatest();
+
+  if (!snapshot) {
+    return res.status(404).json({ error: 'No snapshots available' });
+  }
+
+  return res.json(snapshot);
+});
+
+export default router;

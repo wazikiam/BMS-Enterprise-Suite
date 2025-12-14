@@ -1,12 +1,10 @@
 // packages/server/src/routes/index.ts
 
 import { Router } from 'express';
-import { reportingRouter } from './reporting';
+import reportingRouter from './reporting';
 
-export const routes = Router();
+const router = Router();
 
-/**
- * Root API routes.
- * This file composes feature routers only.
- */
-routes.use('/reporting', reportingRouter);
+router.use('/reporting', reportingRouter);
+
+export default router;
