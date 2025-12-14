@@ -1,44 +1,34 @@
 // packages/server/src/api/PostgresLedgerPostingRepository.ts
 
 /**
- * INFRASTRUCTURE-ONLY MODULE
+ * POSTGRES LEDGER POSTING REPOSITORY
  *
- * This file is an infrastructure adapter.
+ * ROLE:
+ * - Infrastructure-only adapter
+ * - Append-only persistence of immutable ledger postings
  *
- * RULES:
- * - MUST NOT be imported by packages/core
- * - MUST NOT contain domain logic
- * - MUST NOT enforce business rules
- * - Persistence only (append-only)
+ * GUARANTEES:
+ * - NO updates
+ * - NO deletes
+ * - Deterministic ordering
+ * - Idempotent behavior on duplicate IDs
  *
- * If this file is ever imported outside packages/server,
- * that is an architectural violation.
+ * DATABASE ASSUMPTIONS:
+ * - ledger_postings.id is PRIMARY KEY
+ * - ledger_postings is append-only
  */
 
 import { Pool } from 'pg';
 import { ILedgerPostingRepository } from '@bms/core/src/repositories/LedgerPostingRepository';
 import { LedgerPosting } from '@bms/core/src/domain/ledger/LedgerPosting';
 
-/**
- * PostgreSQL adapter for ILedgerPostingRepository.
- *
- * Characteristics:
- * - Append-only
- * - Deterministic
- * - No updates
- * - No deletes
- * - No business rules
- *
- * This class is INFRASTRUCTURE.
- */
 export class PostgresLedgerPostingRepository
   implements ILedgerPostingRepository
 {
   constructor(private readonly pool: Pool) {
-    // Defensive runtime guard: this should never execute outside server
     if (!pool) {
       throw new Error(
-        'PostgresLedgerPostingRepository requires a PostgreSQL pool (infrastructure context)'
+        'PostgresLedgerPostingRepository requires a database pool'
       );
     }
   }
@@ -46,10 +36,10 @@ export class PostgresLedgerPostingRepository
   /**
    * Append a new immutable ledger posting.
    *
-   * This method:
-   * - Assumes all invariants are already enforced upstream
-   * - Performs NO validation
-   * - Writes facts only
+   * IDEMPOTENCY RULE:
+   * - If the same posting ID is inserted twice, the second insert is ignored
+   * - History is never mutated
+   * - Caller receives success (idempotent write)
    */
   async append(posting: LedgerPosting): Promise<void> {
     const sql = `
@@ -60,6 +50,7 @@ export class PostgresLedgerPostingRepository
         created_at
       )
       VALUES ($1, $2, $3::jsonb, now())
+      ON CONFLICT (id) DO NOTHING
     `;
 
     await this.pool.query(sql, [
@@ -70,11 +61,11 @@ export class PostgresLedgerPostingRepository
   }
 
   /**
-   * Retrieve a posting by id.
+   * Retrieve a posting by its unique ID.
    *
    * Deterministic:
-   * - ORDER BY created_at DESC
-   * - LIMIT 1
+   * - If multiple rows somehow exist (should not happen),
+   *   the most recent is returned explicitly.
    */
   async getById(postingId: string): Promise<LedgerPosting | null> {
     const sql = `
@@ -87,7 +78,9 @@ export class PostgresLedgerPostingRepository
 
     const res = await this.pool.query(sql, [postingId]);
 
-    if (res.rowCount === 0) return null;
+    if (res.rowCount === 0) {
+      return null;
+    }
 
     return res.rows[0].payload as LedgerPosting;
   }
@@ -95,7 +88,7 @@ export class PostgresLedgerPostingRepository
   /**
    * Deterministic listing of postings.
    *
-   * Ordering:
+   * DEFAULT ORDER:
    * - occurred_at DESC
    * - id DESC
    */
@@ -124,7 +117,9 @@ export class PostgresLedgerPostingRepository
       values.push(params.occurredTo);
     }
 
-    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const where = clauses.length > 0
+      ? `WHERE ${clauses.join(' AND ')}`
+      : '';
 
     const sql = `
       SELECT payload
