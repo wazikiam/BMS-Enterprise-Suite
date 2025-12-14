@@ -7,19 +7,24 @@ import { ReportingSnapshot } from '@bms/core/src/reporting/dtos/ReportingSnapsho
 /**
  * PostgreSQL-backed implementation of IReportingSnapshotRepository.
  *
- * Invariants:
+ * HARD GUARANTEES:
  * - Append-only persistence (no UPDATE / DELETE)
- * - Supersession is expressed via insert-time linkage (superseded_by)
- * - Reads must be deterministic and auditable
- *
- * Retention:
- * - Retention is query-level visibility control ONLY
- * - Data is never deleted or mutated
+ * - Supersession handled via insert-time linkage
+ * - Deterministic ordering on ALL reads
+ * - Visibility is explicit (effective vs all)
+ * - Retention is query-level only
  */
 export class PostgresReportingSnapshotRepository
   implements IReportingSnapshotRepository
 {
+  private static readonly MAX_LIST_LIMIT = 500;
+  private static readonly DEFAULT_LIST_LIMIT = 50;
+
   constructor(private readonly pool: Pool) {}
+
+  /* =========================
+     WRITE PATH (APPEND-ONLY)
+     ========================= */
 
   async append(snapshot: ReportingSnapshot): Promise<void> {
     const sql = `
@@ -42,7 +47,7 @@ export class PostgresReportingSnapshotRepository
     const payloadJson = JSON.stringify(snapshot);
     const checksum = this.computeChecksum(payloadJson);
 
-    const params = [
+    await this.pool.query(sql, [
       snapshot.snapshotId,
       'REPORTING',
       snapshot.version,
@@ -50,10 +55,12 @@ export class PostgresReportingSnapshotRepository
       snapshot.period.to,
       payloadJson,
       checksum,
-    ];
-
-    await this.pool.query(sql, params);
+    ]);
   }
+
+  /* =========================
+     DIRECT ACCESS (BY ID)
+     ========================= */
 
   async getById(snapshotId: string): Promise<ReportingSnapshot | null> {
     const sql = `
@@ -64,22 +71,13 @@ export class PostgresReportingSnapshotRepository
     `;
 
     const res = await this.pool.query(sql, [snapshotId]);
-    if (res.rowCount === 0) return null;
-
-    return res.rows[0].payload as ReportingSnapshot;
+    return res.rowCount ? (res.rows[0].payload as ReportingSnapshot) : null;
   }
 
-  /**
-   * Resolves the latest EFFECTIVE snapshot.
-   *
-   * Deterministic rules:
-   * - Must not be superseded
-   * - Must be generated at or before `asOf`
-   * - Ordered by generation time, then ID as tie-breaker
-   *
-   * This method NEVER traverses supersession chains.
-   * Supersession correctness is enforced at write-time.
-   */
+  /* =========================
+     EFFECTIVE SNAPSHOT
+     ========================= */
+
   async getLatest(params: {
     periodFrom: Date;
     periodTo: Date;
@@ -92,9 +90,7 @@ export class PostgresReportingSnapshotRepository
         AND period_end   = $2
         AND created_at <= $3
         AND superseded_by IS NULL
-      ORDER BY
-        created_at DESC,
-        id DESC
+      ORDER BY created_at DESC, id DESC
       LIMIT 1
     `;
 
@@ -104,60 +100,48 @@ export class PostgresReportingSnapshotRepository
       params.asOf,
     ]);
 
-    if (res.rowCount === 0) return null;
-
-    return res.rows[0].payload as ReportingSnapshot;
+    return res.rowCount ? (res.rows[0].payload as ReportingSnapshot) : null;
   }
 
-  /**
-   * Retention-aware listing of EFFECTIVE snapshots only.
-   *
-   * Semantics:
-   * - Visibility control only (NO deletion, NO mutation)
-   * - Only effective snapshots participate: superseded_by IS NULL
-   * - Bounded by asOf: created_at <= asOf
-   * - Optional time retention: created_at >= minCreatedAt
-   * - Optional count retention: LIMIT maxCount (capped)
-   * - Deterministic ordering: created_at DESC, id DESC
-   *
-   * Not part of core contract yet; intentionally repository-specific for Week 13.
-   */
+  /* =========================
+     EFFECTIVE + RETENTION
+     ========================= */
+
   async listEffectiveWithRetention(params: {
     periodFrom: Date;
     periodTo: Date;
     asOf: Date;
-    maxCount?: number; // count-based retention (visibility)
-    maxAgeDays?: number; // time-based retention (visibility), relative to asOf
+    maxCount?: number;
+    maxAgeDays?: number;
   }): Promise<ReportingSnapshot[]> {
-    const maxCount = Math.min(params.maxCount ?? 50, 500);
+    const limit = this.normalizeLimit(params.maxCount);
 
-    // Compute threshold in application code for deterministic behavior across DB configs/timezones.
     let minCreatedAt: Date | null = null;
-    if (params.maxAgeDays !== undefined && params.maxAgeDays !== null) {
+    if (params.maxAgeDays !== undefined) {
       if (!Number.isFinite(params.maxAgeDays) || params.maxAgeDays <= 0) {
-        throw new Error('maxAgeDays must be a positive finite number when provided');
+        throw new Error('maxAgeDays must be a positive finite number');
       }
-      const ms = Math.floor(params.maxAgeDays * 24 * 60 * 60 * 1000);
-      minCreatedAt = new Date(params.asOf.getTime() - ms);
+      minCreatedAt = new Date(
+        params.asOf.getTime() -
+          Math.floor(params.maxAgeDays * 24 * 60 * 60 * 1000)
+      );
     }
 
-    const clauses: string[] = [];
-    const values: any[] = [];
-    let i = 1;
+    const clauses: string[] = [
+      'period_start = $1',
+      'period_end = $2',
+      'created_at <= $3',
+      'superseded_by IS NULL',
+    ];
 
-    clauses.push(`period_start = $${i++}`);
-    values.push(params.periodFrom);
-
-    clauses.push(`period_end = $${i++}`);
-    values.push(params.periodTo);
-
-    clauses.push(`created_at <= $${i++}`);
-    values.push(params.asOf);
-
-    clauses.push(`superseded_by IS NULL`);
+    const values: any[] = [
+      params.periodFrom,
+      params.periodTo,
+      params.asOf,
+    ];
 
     if (minCreatedAt) {
-      clauses.push(`created_at >= $${i++}`);
+      clauses.push(`created_at >= $${values.length + 1}`);
       values.push(minCreatedAt);
     }
 
@@ -166,33 +150,34 @@ export class PostgresReportingSnapshotRepository
       FROM reporting_snapshots
       WHERE ${clauses.join(' AND ')}
       ORDER BY created_at DESC, id DESC
-      LIMIT $${i}
+      LIMIT ${limit}
     `;
-
-    values.push(maxCount);
 
     const res = await this.pool.query(sql, values);
     return res.rows.map((r) => r.payload as ReportingSnapshot);
   }
+
+  /* =========================
+     RAW LISTING (ALL SNAPSHOTS)
+     ========================= */
 
   async list(params?: {
     fromGeneratedAt?: Date;
     toGeneratedAt?: Date;
     limit?: number;
   }): Promise<ReportingSnapshot[]> {
-    const limit = Math.min(params?.limit ?? 50, 500);
+    const limit = this.normalizeLimit(params?.limit);
 
     const clauses: string[] = [];
     const values: any[] = [];
-    let i = 1;
 
     if (params?.fromGeneratedAt) {
-      clauses.push(`created_at >= $${i++}`);
+      clauses.push(`created_at >= $${values.length + 1}`);
       values.push(params.fromGeneratedAt);
     }
 
     if (params?.toGeneratedAt) {
-      clauses.push(`created_at <= $${i++}`);
+      clauses.push(`created_at <= $${values.length + 1}`);
       values.push(params.toGeneratedAt);
     }
 
@@ -203,13 +188,29 @@ export class PostgresReportingSnapshotRepository
       FROM reporting_snapshots
       ${where}
       ORDER BY created_at DESC, id DESC
-      LIMIT $${i}
+      LIMIT ${limit}
     `;
-
-    values.push(limit);
 
     const res = await this.pool.query(sql, values);
     return res.rows.map((r) => r.payload as ReportingSnapshot);
+  }
+
+  /* =========================
+     INTERNAL GUARDS
+     ========================= */
+
+  private normalizeLimit(requested?: number): number {
+    const limit =
+      requested ?? PostgresReportingSnapshotRepository.DEFAULT_LIST_LIMIT;
+
+    if (!Number.isFinite(limit) || limit <= 0) {
+      throw new Error('limit must be a positive finite number');
+    }
+
+    return Math.min(
+      limit,
+      PostgresReportingSnapshotRepository.MAX_LIST_LIMIT
+    );
   }
 
   private computeChecksum(payloadJson: string): string {
