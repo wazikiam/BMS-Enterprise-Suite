@@ -1,9 +1,61 @@
+# ================================
+# Node / Build outputs
+# ================================
 node_modules/
 dist/
 build/
 coverage/
+
+# ================================
+# Environment files
+# ================================
 .env
+.env.*
+!.env.example
+
+# ================================
+# Editors / IDEs
+# ================================
 .vscode/
 .idea/
+
+# ================================
+# Tooling / Monorepo
+# ================================
 .turbo/
-tatus
+.nx/
+.cache/
+
+# ================================
+# OS / Shell junk (IMPORTANT)
+# ================================
+cd
+dir
+echo
+findstr
+curl
+notepad
+npm
+nodemon
+vite
+concurrently
+
+# ================================
+# Accidental text fragments
+# ================================
+1)'
+The
+${*
+{*
+*error*
+
+# ================================
+# Runtime artifacts (never commit)
+# ================================
+CREATES
+REJECTS
+
+# ================================
+# Nested accidental paths
+# ================================
+packages/server/packages/
