@@ -1,55 +1,69 @@
 // apps/admin-web/src/router.tsx
-// BMS ENTERPRISE SUITE — ADMIN WEB ROUTER
-// Deterministic, explicit routing. No lazy magic. No side effects.
+// ADMIN-WEB ROUTER — DETERMINISTIC, GOVERNANCE-SAFE
+//
+// Rules:
+// - No lazy-loading (deterministic build + routing)
+// - Explicit routes only
+// - Snapshot UX is read-only and separated from write commands
 
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import {
+  Navigate,
+  createBrowserRouter,
+} from 'react-router-dom';
 
-// ─────────────────────────────────────────────────────────────
-// Pages
-// (These must exist. If one is missing, build will fail — by design.)
-// ─────────────────────────────────────────────────────────────
+import SnapshotsListPage from './pages/reports/SnapshotsListPage';
+import SnapshotDetailsPage from './pages/reports/SnapshotDetailsPage';
+import ApprovedSnapshotResolver from './ApprovedSnapshotResolver';
 
-import DashboardPage from './pages/DashboardPage';
-import SnapshotsPage from './pages/SnapshotsPage';
-import SnapshotDetailsPage from './pages/SnapshotDetailsPage';
-import FinancePeriodsPage from './pages/FinancePeriodsPage';
-import LedgerPage from './pages/LedgerPage';
-import TrialBalancePage from './pages/TrialBalancePage';
-
-// ─────────────────────────────────────────────────────────────
-// Router
-// ─────────────────────────────────────────────────────────────
-
-export function AppRouter(): JSX.Element {
+function NotFound(): JSX.Element {
   return (
-    <BrowserRouter>
-      <Routes>
-        {/* Root */}
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-
-        {/* Core */}
-        <Route path="/dashboard" element={<DashboardPage />} />
-
-        {/* Reporting / Snapshots */}
-        <Route path="/snapshots" element={<SnapshotsPage />} />
-        <Route
-          path="/snapshots/:snapshotId"
-          element={<SnapshotDetailsPage />}
-        />
-
-        {/* Finance */}
-        <Route path="/finance/periods" element={<FinancePeriodsPage />} />
-
-        {/* Ledger */}
-        <Route path="/ledger" element={<LedgerPage />} />
-        <Route path="/ledger/trial-balance" element={<TrialBalancePage />} />
-
-        {/* Fallback — fail closed */}
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
-      </Routes>
-    </BrowserRouter>
+    <div style={{ padding: 16 }}>
+      <h2 style={{ margin: 0 }}>Not Found</h2>
+      <p style={{ marginTop: 8 }}>
+        The requested page does not exist.
+      </p>
+    </div>
   );
 }
 
-export default AppRouter;
+/**
+ * Router contract:
+ * - /reports/snapshots              => list snapshots
+ * - /reports/snapshots/:snapshotId  => snapshot details
+ * - /reports/snapshots/approved     => resolves to the approved snapshot (if any)
+ */
+export const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <Navigate to="/reports/snapshots" replace />,
+    errorElement: <NotFound />,
+  },
+  {
+    path: '/reports',
+    errorElement: <NotFound />,
+    children: [
+      {
+        path: 'snapshots',
+        children: [
+          {
+            index: true,
+            element: <SnapshotsListPage />,
+          },
+          {
+            path: 'approved',
+            element: <ApprovedSnapshotResolver />,
+          },
+          {
+            path: ':snapshotId',
+            element: <SnapshotDetailsPage />,
+          },
+        ],
+      },
+    ],
+  },
+  {
+    path: '*',
+    element: <NotFound />,
+  },
+]);

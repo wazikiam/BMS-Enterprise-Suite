@@ -1,5 +1,18 @@
 // apps/admin-web/src/ApprovedSnapshotResolver.ts
 // Week 36 — Approved Snapshot Resolver (UI-first governance)
+//
+// This file contains TWO layers:
+// 1) Pure resolution logic (backward-compatible storage keys)
+// 2) A deterministic, read-only UI resolver component (default export)
+//    used by the router route: /reports/snapshots/approved
+//
+// Rules:
+// - READ-ONLY (no mutations)
+// - Deterministic behavior
+// - Fail-closed: explicit message if no approved snapshot exists
+
+import React from 'react';
+import { Navigate } from 'react-router-dom';
 
 export type SnapshotStatus = 'draft' | 'provisional' | 'final' | 'closed';
 
@@ -37,9 +50,21 @@ function safeParse<T>(raw: string | null, fallback: T): T {
   }
 }
 
+/**
+ * localStorage can throw in restricted environments.
+ * Governance posture: fail-closed by returning null-equivalent storage.
+ */
+function safeGetItem(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
 export function loadMetaMap(): Record<string, SnapshotMeta> {
   return safeParse<Record<string, SnapshotMeta>>(
-    localStorage.getItem(META_KEY),
+    safeGetItem(META_KEY),
     {}
   );
 }
@@ -53,7 +78,7 @@ function loadApprovalsMap(): Record<
   string,
   Array<{ name: string; role?: string; at: string }>
 > {
-  return safeParse(localStorage.getItem(APPROVALS_KEY), {});
+  return safeParse(safeGetItem(APPROVALS_KEY), {});
 }
 
 /**
@@ -62,7 +87,7 @@ function loadApprovalsMap(): Record<
  * { [snapshotId]: { sealedAt, sealedHash } }
  */
 function loadSealMap(): Record<string, { sealedAt?: string; sealedHash?: string }> {
-  return safeParse(localStorage.getItem(SEAL_KEY), {});
+  return safeParse(safeGetItem(SEAL_KEY), {});
 }
 
 /**
@@ -71,7 +96,7 @@ function loadSealMap(): Record<string, { sealedAt?: string; sealedHash?: string 
  * { [snapshotId]: { verifiedAt } }
  */
 function loadVerifyMap(): Record<string, { verifiedAt?: string }> {
-  return safeParse(localStorage.getItem(VERIFY_KEY), {});
+  return safeParse(safeGetItem(VERIFY_KEY), {});
 }
 
 export type ApprovedSnapshotResolution = {
@@ -175,4 +200,40 @@ export function resolveApprovedSnapshot(): ApprovedSnapshotResolution | null {
   });
 
   return pool[0];
+}
+
+/**
+ * DEFAULT EXPORT — Router expects a component here.
+ * Deterministic behavior:
+ * - If an approved snapshot exists: redirect to its details route.
+ * - Otherwise: render a fail-closed message with a safe navigation link.
+ */
+export default function ApprovedSnapshotResolver(): React.ReactElement {
+  const resolved = resolveApprovedSnapshot();
+
+  if (resolved?.snapshotId) {
+    return React.createElement(Navigate, {
+      to: `/reports/snapshots/${resolved.snapshotId}`,
+      replace: true,
+    });
+  }
+
+  // Fail-closed: explicit message, no guessing, no regeneration.
+  return React.createElement(
+    'div',
+    { style: { padding: 24 } },
+    React.createElement('h1', { style: { margin: 0 } }, 'Approved Snapshot'),
+    React.createElement(
+      'p',
+      { style: { marginTop: 8, opacity: 0.8 } },
+      'No approved snapshot available.'
+    ),
+    React.createElement(
+      'p',
+      { style: { marginTop: 12, opacity: 0.7 } },
+      'This resolver is read-only. To view snapshots, go to ',
+      React.createElement('a', { href: '/reports/snapshots' }, '/reports/snapshots'),
+      '.'
+    )
+  );
 }
