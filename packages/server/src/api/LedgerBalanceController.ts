@@ -1,39 +1,60 @@
 // packages/server/src/api/LedgerBalanceController.ts
 
 import { Request, Response } from 'express';
-import { LedgerBalanceQuery } from '@bms/core/src/ledger-balances/LedgerBalanceQuery';
 import { FinancialPeriodReadModel } from './FinancialPeriodReadModel';
+
+/**
+ * LedgerBalanceReadPort
+ *
+ * Explicit read contract expected by this controller.
+ * Keeps HTTP isolated from provider internals.
+ */
+export interface LedgerBalanceReadPort {
+  getAccountBalance(params: {
+    accountId: string;
+    currency: string;
+    asOf: Date;
+    periodFrom?: Date;
+    periodTo?: Date;
+  }): Promise<{
+    accountId: string;
+    currency: string;
+    debitTotal: number;
+    creditTotal: number;
+    balance: number;
+    asOf: Date;
+  }>;
+}
 
 /**
  * LedgerBalanceController
  *
- * READ-ONLY boundary.
+ * READ-ONLY HTTP boundary.
  *
  * Guarantees:
  * - No writes
  * - No mutations
- * - Deterministic "asOf" reads
- * - Period-aware governance
+ * - Deterministic as-of reads
+ * - Period-aware transparency
  *
- * Rules:
- * - CLOSED period  -> ALLOW (read-only, final)
- * - OPEN period    -> ALLOW (live)
- * - UNGOVERNED     -> ALLOW
- *
- * This controller NEVER blocks reads.
- * It only validates and documents period state explicitly.
+ * Reads are NEVER blocked.
  */
 export class LedgerBalanceController {
   constructor(
-    private readonly balanceQuery: LedgerBalanceQuery,
+    private readonly balanceQuery: LedgerBalanceReadPort,
     private readonly financialPeriodReadModel: FinancialPeriodReadModel
   ) {}
 
   async getBalance(req: Request, res: Response): Promise<void> {
-    const { accountId, periodFrom, periodTo, asOf } = req.query;
+    const { accountId, currency, periodFrom, periodTo, asOf } = req.query;
 
     if (!accountId || typeof accountId !== 'string') {
       res.status(400).json({ error: 'accountId is required' });
+      return;
+    }
+
+    if (!currency || typeof currency !== 'string') {
+      res.status(400).json({ error: 'currency is required' });
       return;
     }
 
@@ -47,34 +68,28 @@ export class LedgerBalanceController {
 
     const parsedAsOf = asOf ? new Date(asOf as string) : new Date();
 
-    // Optional governance resolution (READ-ONLY)
+    // Resolve period state for transparency (READ-ONLY)
     if (parsedPeriodFrom && parsedPeriodTo) {
-      const effectivePeriod =
-        await this.financialPeriodReadModel.resolveEffectivePeriod({
-          periodFrom: parsedPeriodFrom,
-          periodTo: parsedPeriodTo,
-        });
-
-      // We DO NOT block reads.
-      // We only surface state for transparency.
-      if (effectivePeriod?.state === 'CLOSED') {
-        // Explicitly allowed — final historical truth
-      }
+      await this.financialPeriodReadModel.resolveEffectivePeriod({
+        periodFrom: parsedPeriodFrom,
+        periodTo: parsedPeriodTo,
+      });
     }
 
-    const result = await this.balanceQuery.getBalance({
+    const result = await this.balanceQuery.getAccountBalance({
       accountId,
+      currency,
+      asOf: parsedAsOf,
       periodFrom: parsedPeriodFrom,
       periodTo: parsedPeriodTo,
-      asOf: parsedAsOf,
     });
 
     res.status(200).json({
-      accountId,
-      asOf: result.asOf.toISOString(),
+      accountId: result.accountId,
       currency: result.currency,
-      debit: result.debit,
-      credit: result.credit,
+      asOf: result.asOf.toISOString(),
+      debitTotal: result.debitTotal,
+      creditTotal: result.creditTotal,
       balance: result.balance,
     });
   }

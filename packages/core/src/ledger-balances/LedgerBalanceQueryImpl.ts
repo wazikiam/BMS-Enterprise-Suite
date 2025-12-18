@@ -1,8 +1,7 @@
 // packages/core/src/ledger-balances/LedgerBalanceQueryImpl.ts
 
 import { LedgerBalance } from './LedgerBalance';
-import { LedgerBalanceCalculator } from './LedgerBalanceCalculator';
-import { LedgerBalanceRepository } from './LedgerBalanceRepository';
+import { ILedgerBalanceRepository } from './LedgerBalanceRepository';
 
 /**
  * LedgerBalanceQueryImpl
@@ -10,54 +9,46 @@ import { LedgerBalanceRepository } from './LedgerBalanceRepository';
  * Pure application-layer query.
  *
  * Responsibilities:
- * - Load immutable ledger postings from repository
- * - Delegate deterministic aggregation to calculator
- * - Return stable balance snapshot
+ * - Delegate to deterministic read-model repository
+ * - Enforce explicit as-of semantics
  *
  * Guarantees:
  * - No writes
  * - No side effects
- * - No infrastructure knowledge
+ * - No balance math
+ * - No domain leakage
  */
 export class LedgerBalanceQueryImpl {
   constructor(
-    private readonly repository: LedgerBalanceRepository,
-    private readonly calculator: LedgerBalanceCalculator = new LedgerBalanceCalculator()
+    private readonly repository: ILedgerBalanceRepository
   ) {}
 
   /**
-   * Compute balances for a single account.
+   * Resolve balance for a single account.
    */
   async getAccountBalance(params: {
     accountId: string;
-    asOf?: Date;
+    currency: string;
+    asOf: Date;
   }): Promise<LedgerBalance> {
-    const postings = await this.repository.findPostings({
+    return this.repository.getAccountBalance({
       accountId: params.accountId,
-      asOf: params.asOf,
-    });
-
-    return this.calculator.calculate({
-      accountId: params.accountId,
-      postings,
+      currency: params.currency,
       asOf: params.asOf,
     });
   }
 
   /**
-   * Compute balances for multiple accounts.
+   * Resolve balances for multiple accounts.
    */
-  async getBalances(params: {
+  async getAccountBalances(params: {
     accountIds: string[];
-    asOf?: Date;
+    currency: string;
+    asOf: Date;
   }): Promise<LedgerBalance[]> {
-    const postings = await this.repository.findPostings({
+    return this.repository.getAccountBalances({
       accountIds: params.accountIds,
-      asOf: params.asOf,
-    });
-
-    return this.calculator.calculateMany({
-      postings,
+      currency: params.currency,
       asOf: params.asOf,
     });
   }

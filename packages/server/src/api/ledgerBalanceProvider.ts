@@ -1,24 +1,26 @@
 // packages/server/src/api/ledgerBalanceProvider.ts
+//
+// LEDGER BALANCE PROVIDER (READ SIDE)
+//
+// - READS are never blocked by period state
+// - Period governance is still resolved deterministically
+// - Financial periods are EVENT-SOURCED
+// - No table-derived state
 
 import { getPostgresPool } from '../db/PostgresClient';
 
 import { LedgerBalanceQueryImpl } from '@bms/core/src/ledger-balances/LedgerBalanceQueryImpl';
 
 import { PostgresLedgerBalanceRepository } from './PostgresLedgerBalanceRepository';
-import { PostgresFinancialPeriodRepository } from './PostgresFinancialPeriodRepository';
+import { PostgresFinancialPeriodEventRepository } from './PostgresFinancialPeriodEventRepository';
 import { FinancialPeriodReadModel } from './FinancialPeriodReadModel';
 
 /**
  * PeriodReadGuard
  *
- * Single authoritative governance seam for READ access to ledger balances.
- *
- * Rules:
- * - If NO financial period exists → allow (ungoverned)
- * - OPEN / REOPENED → allow
- * - CLOSED → reject
- *
- * This mirrors snapshot + ledger write governance.
+ * Single governance seam for READ access.
+ * Reads are ALWAYS allowed.
+ * This guard exists for explicitness and audit traceability.
  */
 export interface PeriodReadGuard {
   assertReadAllowed(params: {
@@ -28,71 +30,55 @@ export interface PeriodReadGuard {
   }): Promise<void>;
 }
 
-class DatabaseBackedPeriodReadGuard implements PeriodReadGuard {
-  constructor(
-    private readonly periodReadModel: FinancialPeriodReadModel
-  ) {}
+class EventBackedPeriodReadGuard implements PeriodReadGuard {
+  constructor(private readonly periodReadModel: FinancialPeriodReadModel) {}
 
   async assertReadAllowed(params: {
     periodFrom?: Date;
     periodTo?: Date;
     asOf: Date;
   }): Promise<void> {
-    // If no period specified, read is unbounded → allowed
-    if (!params.periodFrom || !params.periodTo) {
-      return;
-    }
+    if (!params.periodFrom || !params.periodTo) return;
 
-    const effective = await this.periodReadModel.resolveEffectivePeriod({
+    // Resolve for auditability only.
+    // READS ARE NEVER BLOCKED.
+    await this.periodReadModel.resolveEffectivePeriod({
       periodFrom: params.periodFrom,
       periodTo: params.periodTo,
     });
-
-    // Ungoverned period → allowed
-    if (!effective) return;
-
-    if (effective.state === 'CLOSED') {
-      throw new Error(
-        `Financial period ${effective.periodStart.toISOString()} -> ${effective.periodEnd.toISOString()} is CLOSED`
-      );
-    }
   }
 }
 
 /**
  * LedgerBalanceProvider
  *
- * Application boundary for ledger balance reads.
- * - Composes repositories
- * - Enforces period governance
- * - Exposes read-only query
+ * Application boundary for READ-ONLY ledger balances.
  */
 export function createLedgerBalanceProvider() {
   const pool = getPostgresPool();
 
-  // Persistence
   const balanceRepository = new PostgresLedgerBalanceRepository(pool);
-  const financialPeriodRepository = new PostgresFinancialPeriodRepository(pool);
 
-  // Deterministic period interpreter
+  // EVENT-SOURCED financial period governance
+  const financialPeriodEventRepository =
+    new PostgresFinancialPeriodEventRepository(pool);
+
   const financialPeriodReadModel = new FinancialPeriodReadModel(
-    financialPeriodRepository
+    financialPeriodEventRepository
   );
 
-  // Governance
   const periodReadGuard: PeriodReadGuard =
-    new DatabaseBackedPeriodReadGuard(financialPeriodReadModel);
+    new EventBackedPeriodReadGuard(financialPeriodReadModel);
 
-  // Pure core query
   const baseQuery = new LedgerBalanceQueryImpl(balanceRepository);
 
-  // Guarded query
-  const guardedQuery = {
-    async getBalance(params: {
+  const ledgerBalanceQuery = {
+    async getAccountBalance(params: {
       accountId: string;
+      currency: string;
+      asOf: Date;
       periodFrom?: Date;
       periodTo?: Date;
-      asOf: Date;
     }) {
       await periodReadGuard.assertReadAllowed({
         periodFrom: params.periodFrom,
@@ -100,12 +86,25 @@ export function createLedgerBalanceProvider() {
         asOf: params.asOf,
       });
 
-      return baseQuery.getBalance(params);
+      return baseQuery.getAccountBalance({
+        accountId: params.accountId,
+        currency: params.currency,
+        asOf: params.asOf,
+      });
+    },
+
+    async getAccountBalances(params: {
+      accountIds: string[];
+      currency: string;
+      asOf: Date;
+    }) {
+      return baseQuery.getAccountBalances(params);
     },
   };
 
   return {
-    ledgerBalanceQuery: guardedQuery,
+    ledgerBalanceQuery,
+    financialPeriodReadModel,
   };
 }
 

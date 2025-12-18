@@ -1,46 +1,76 @@
 // packages/server/src/api/LedgerBalanceSnapshotService.ts
 
-import { LedgerBalanceQuery } from '@bms/core/src/ledger-balances/LedgerBalanceQuery';
-import { ReportingSnapshotRepository } from './ReportingSnapshotRepository';
+/**
+ * Minimal reporting snapshot shape required for read-only orchestration.
+ * This service is intentionally ignorant of persistence and SQL.
+ */
+export type ReportingSnapshotRecord = {
+  snapshotId: string;
+  periodFrom: Date;
+  periodTo: Date;
+  asOf: Date;
+  supersededBySnapshotId?: string | null;
+};
+
+/**
+ * Read-only port for loading immutable reporting snapshots.
+ * Implemented in server infrastructure, NOT in core.
+ */
+export interface ReportingSnapshotReader {
+  getById(snapshotId: string): Promise<ReportingSnapshotRecord | null>;
+}
+
+/**
+ * Read-only port for resolving ledger balances.
+ *
+ * IMPORTANT:
+ * Governed read boundary only.
+ * No write-side dependency.
+ */
+export interface LedgerBalanceReadPort {
+  getBalance(params: {
+    periodFrom?: Date;
+    periodTo?: Date;
+    asOf: Date;
+  }): Promise<any>;
+}
 
 /**
  * READ-ONLY orchestration service.
  *
- * Responsibilities:
- * - Load immutable Reporting Snapshot
- * - Validate snapshot is resolvable and not superseded
- * - Extract (periodFrom, periodTo, asOf)
- * - Delegate balance resolution to LedgerBalanceQuery
- *
- * Constraints enforced:
- * - No SQL
- * - No writes
- * - No mutations
- * - No balance math
- * - Pure composition only
+ * CRITICAL RULE (Week 21):
+ * - MUST NOT throw
+ * - MUST NOT crash server
+ * - Missing snapshot → return empty result with warning
  */
 export class LedgerBalanceSnapshotService {
   constructor(
-    private readonly snapshotRepository: ReportingSnapshotRepository,
-    private readonly ledgerBalanceQuery: LedgerBalanceQuery
+    private readonly snapshotReader: ReportingSnapshotReader,
+    private readonly ledgerBalanceReadPort: LedgerBalanceReadPort
   ) {}
 
-  async getBalanceAsOfSnapshot(snapshotId: string) {
-    const snapshot = await this.snapshotRepository.getById(snapshotId);
+  async getBalanceAsOfSnapshot(snapshotId: string): Promise<any> {
+    const snapshot = await this.snapshotReader.getById(snapshotId);
 
     if (!snapshot) {
-      throw new Error(`Reporting snapshot not found: ${snapshotId}`);
+      return {
+        snapshotId,
+        balances: [],
+        warning: 'Snapshot not found in read model (in-memory)',
+      };
     }
 
     if (snapshot.supersededBySnapshotId) {
-      throw new Error(
-        `Reporting snapshot ${snapshotId} has been superseded by ${snapshot.supersededBySnapshotId}`
-      );
+      return {
+        snapshotId,
+        balances: [],
+        warning: `Snapshot superseded by ${snapshot.supersededBySnapshotId}`,
+      };
     }
 
     const { periodFrom, periodTo, asOf } = snapshot;
 
-    return this.ledgerBalanceQuery.getBalance({
+    return this.ledgerBalanceReadPort.getBalance({
       periodFrom,
       periodTo,
       asOf,

@@ -22,10 +22,7 @@ import { LedgerEntry } from '@bms/core/src/domain/ledger/LedgerEntry';
 export class PostgresLedgerBalanceRepository
   implements ILedgerBalanceRepository
 {
-  constructor(
-    private readonly pool: Pool,
-    private readonly calculator: LedgerBalanceCalculator = new LedgerBalanceCalculator()
-  ) {}
+  constructor(private readonly pool: Pool) {}
 
   async getAccountBalance(params: {
     accountId: string;
@@ -33,13 +30,13 @@ export class PostgresLedgerBalanceRepository
     asOf: Date;
   }): Promise<LedgerBalance> {
     const entries = await this.loadEntries({
-      accountId: params.accountId,
+      accountCode: params.accountId,
       currency: params.currency,
       asOf: params.asOf,
     });
 
-    return this.calculator.calculate({
-      accountId: params.accountId,
+    return LedgerBalanceCalculator.calculate({
+      accountCode: params.accountId,
       currency: params.currency,
       asOf: params.asOf,
       entries,
@@ -70,7 +67,7 @@ export class PostgresLedgerBalanceRepository
    * Load immutable ledger entries deterministically.
    */
   private async loadEntries(params: {
-    accountId: string;
+    accountCode: string;
     currency: string;
     asOf: Date;
   }): Promise<LedgerEntry[]> {
@@ -78,14 +75,14 @@ export class PostgresLedgerBalanceRepository
       SELECT payload
       FROM ledger_entries
       WHERE
-        (payload->>'accountId') = $1
+        (payload->>'accountCode') = $1
         AND (payload->>'currency') = $2
         AND occurred_at <= $3
       ORDER BY occurred_at ASC, id ASC
     `;
 
     const res = await this.pool.query(sql, [
-      params.accountId,
+      params.accountCode,
       params.currency,
       params.asOf,
     ]);

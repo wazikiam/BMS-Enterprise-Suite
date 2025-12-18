@@ -1,0 +1,41 @@
+{
+  "extends": "./tsconfig.json",
+
+  "compilerOptions": {
+    "outDir": "./dist",
+    "noEmit": false
+  },
+
+  "include": [
+    "src/index.ts",
+
+    // Reporting (read + snapshot generation)
+    "src/routes/reporting/index.ts",
+    "src/api/reportingProvider.ts",
+    "src/api/PostgresReportingSnapshotRepository.ts",
+    "src/api/FinancialPeriodReadModel.ts",
+    "src/api/PostgresFinancialPeriodRepository.ts",
+
+    // Ledger balance READ path
+    "src/api/PostgresLedgerBalanceRepository.ts",
+    "src/api/ledgerBalanceProvider.ts",
+    "src/api/LedgerBalanceController.ts",
+    "src/api/ledgerBalance.routes.ts",
+
+    // Ledger snapshot READ path
+    "src/api/LedgerBalanceSnapshotService.ts",
+    "src/api/LedgerBalanceSnapshotController.ts",
+    "src/api/ledgerBalanceSnapshot.routes.ts"
+  ],
+
+  "exclude": [
+    "node_modules",
+    "dist",
+
+    // Explicitly exclude ALL write-side ledger code
+    "src/api/LedgerPostingCommandService.ts",
+    "src/api/LedgerPostingController.ts",
+    "src/api/ledgerProvider.ts",
+    "src/routes/ledger"
+  ]
+}

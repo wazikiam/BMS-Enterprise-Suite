@@ -27,7 +27,8 @@ export class LedgerBalanceSnapshotController {
       return;
     }
 
-    const balance = await this.snapshotService.getBalanceAsOfSnapshot(snapshotId);
+    const balance =
+      await this.snapshotService.getBalanceAsOfSnapshot(snapshotId);
 
     res.status(200).json(balance);
   }

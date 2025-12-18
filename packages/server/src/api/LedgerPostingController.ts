@@ -1,57 +1,97 @@
 // packages/server/src/api/LedgerPostingController.ts
+// LEDGER POSTING CONTROLLER — WRITE SIDE (Week 20 ENABLED)
 
 import { Request, Response } from 'express';
-
-import { LedgerPosting } from '@bms/core/src/domain/ledger/LedgerPosting';
-import { LedgerEntry } from '@bms/core/src/domain/ledger/LedgerEntry';
-import { LedgerSide } from '@bms/core/src/domain/ledger/LedgerSide';
-
-import { LedgerPostingCommandService } from './LedgerPostingCommandService';
-import { validateCreateLedgerPostingDTO } from './validators/ledgerPosting.validator';
-import { CreateLedgerPostingDTO } from './dto/CreateLedgerPostingDTO';
+import { PostgresLedgerEventRepository } from './PostgresLedgerEventRepository';
+import {
+  LedgerWriteCommand,
+  LedgerWriteActor,
+} from '@bms/core/src/ledger/LedgerWriteGateway';
 
 export class LedgerPostingController {
   constructor(
-    private readonly commandService: LedgerPostingCommandService
-  ) {
-    if (!commandService) {
-      throw new Error(
-        'LedgerPostingController requires LedgerPostingCommandService'
-      );
-    }
-  }
+    private readonly repository: PostgresLedgerEventRepository
+  ) {}
 
   async create(req: Request, res: Response): Promise<void> {
-    validateCreateLedgerPostingDTO(req.body);
+    try {
+      const actorCtx = (req as any).actor;
+      if (
+        !actorCtx ||
+        typeof actorCtx.id !== 'string' ||
+        !Array.isArray(actorCtx.roles)
+      ) {
+        res.status(403).json({
+          error: 'Forbidden: actor context missing',
+        });
+        return;
+      }
 
-    const dto: CreateLedgerPostingDTO = req.body;
+      const body = req.body ?? {};
 
-    const entries = dto.entries.map(
-      (e) =>
-        new LedgerEntry({
-          accountId: e.accountId,
-          side:
-            e.side === 'DEBIT'
-              ? LedgerSide.DEBIT
-              : LedgerSide.CREDIT,
-          amount: e.amount,
-          currency: e.currency,
-          periodStart: new Date(e.periodStart),
-          periodEnd: new Date(e.periodEnd),
-        })
-    );
+      const {
+        eventId,
+        journalId,
+        eventType,
+        occurredAt,
+        accountCode,
+        debitAmount,
+        creditAmount,
+        currency,
+        reason,
+      } = body;
 
-    const posting = new LedgerPosting({
-      id: dto.postingId,
-      occurredAt: new Date(dto.occurredAt),
-      entries,
-    });
+      if (
+        !eventId ||
+        !journalId ||
+        !eventType ||
+        !occurredAt ||
+        !currency ||
+        !reason
+      ) {
+        res.status(400).json({
+          error: 'Ledger event rejected',
+          reason: 'Missing required fields',
+        });
+        return;
+      }
 
-    await this.commandService.append(posting);
+      const occurredAtDate = new Date(occurredAt);
+      if (Number.isNaN(occurredAtDate.getTime())) {
+        res.status(400).json({
+          error: 'Ledger event rejected',
+          reason: 'Invalid occurredAt timestamp',
+        });
+        return;
+      }
 
-    res.status(201).json({
-      status: 'accepted',
-      postingId: posting.id,
-    });
+      const cmd: LedgerWriteCommand = {
+        eventId,
+        journalId,
+        eventType,
+        occurredAt: occurredAtDate,
+        accountCode,
+        debitAmount,
+        creditAmount,
+        currency,
+        reason,
+      };
+
+      const actor: LedgerWriteActor = {
+        actorId: actorCtx.id,
+        roles: actorCtx.roles,
+      };
+
+      const event = await this.repository.append(cmd, actor);
+
+      res.status(201).json({
+        eventId: event.eventId,
+      });
+    } catch (err: any) {
+      res.status(400).json({
+        error: 'Ledger event rejected',
+        reason: err?.message ?? 'Unknown error',
+      });
+    }
   }
 }

@@ -1,22 +1,22 @@
 // packages/server/src/api/LedgerPostingWriteGuard.ts
+//
+// LEDGER POSTING WRITE GUARD
+//
+// Application-boundary write barrier.
+//
+// Enforces that NO ledger posting may be appended when:
+// - The effective financial period is CLOSED
+// - The effective financial period is under LEGAL HOLD
+//
+// This guard:
+// - Does NOT mutate data
+// - Does NOT calculate balances
+// - Does NOT touch persistence
+// - Operates deterministically
 
 import { LedgerPosting } from '@bms/core/src/domain/ledger/LedgerPosting';
 import { FinancialPeriodReadModel } from './FinancialPeriodReadModel';
 
-/**
- * LedgerPostingWriteGuard
- *
- * Application-boundary write barrier.
- *
- * Enforces that NO ledger posting may be appended
- * into a CLOSED financial period.
- *
- * This guard:
- * - Does NOT mutate data
- * - Does NOT calculate balances
- * - Does NOT touch persistence
- * - Operates deterministically
- */
 export class LedgerPostingWriteGuard {
   constructor(
     private readonly financialPeriodReadModel: FinancialPeriodReadModel
@@ -37,7 +37,7 @@ export class LedgerPostingWriteGuard {
         periodTo: firstEntry.periodEnd,
       });
 
-    // No governance yet → allowed explicitly
+    // No governance yet → explicitly allowed
     if (!effectivePeriod) return;
 
     if (effectivePeriod.state === 'CLOSED') {
@@ -45,6 +45,14 @@ export class LedgerPostingWriteGuard {
         `Ledger posting rejected: financial period ` +
           `${firstEntry.periodStart.toISOString()} -> ` +
           `${firstEntry.periodEnd.toISOString()} is CLOSED`
+      );
+    }
+
+    if (effectivePeriod.legalHold === true) {
+      throw new Error(
+        `Ledger posting rejected: financial period ` +
+          `${firstEntry.periodStart.toISOString()} -> ` +
+          `${firstEntry.periodEnd.toISOString()} is under LEGAL HOLD`
       );
     }
   }

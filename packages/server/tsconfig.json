@@ -10,12 +10,19 @@
     "forceConsistentCasingInFileNames": true,
     "sourceMap": true
   },
-  "include": ["src/**/*"],
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.d.ts"
+  ],
   "exclude": [
     "node_modules",
     "dist",
     "**/*.test.ts",
-    "src/api/auth/**",
-    "src/api/**__disabled/**"
+
+    "**/*__disabled/**",
+    "src/**/*__disabled/**",
+
+    "**/LedgerPosting*.ts",
+    "src/api/ledgerProvider.ts"
   ]
 }

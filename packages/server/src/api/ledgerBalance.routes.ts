@@ -3,13 +3,17 @@
 import { Router } from 'express';
 import { LedgerBalanceController } from './LedgerBalanceController';
 import { LedgerBalanceProvider } from './ledgerBalanceProvider';
+import { FinancialPeriodReadModel } from './FinancialPeriodReadModel';
 
 export function createLedgerBalanceRoutes(
-  provider: LedgerBalanceProvider
+  provider: LedgerBalanceProvider,
+  financialPeriodReadModel: FinancialPeriodReadModel
 ): Router {
   const router = Router();
+
   const controller = new LedgerBalanceController(
-    provider.ledgerBalanceQuery
+    provider.ledgerBalanceQuery,
+    financialPeriodReadModel
   );
 
   /**
@@ -17,6 +21,7 @@ export function createLedgerBalanceRoutes(
    *
    * Query params:
    * - accountId (required)
+   * - currency (required)
    * - periodFrom (optional, ISO)
    * - periodTo (optional, ISO)
    * - asOf (optional, ISO)

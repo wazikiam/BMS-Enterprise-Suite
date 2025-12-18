@@ -1,197 +1,229 @@
-import React, { useState } from 'react';
+import { Routes, Route, Navigate, Link, useParams } from 'react-router-dom';
 import {
   Box,
-  Button,
-  TextField,
   Typography,
-  Paper,
-  Alert,
+  Button,
+  Stack,
   CircularProgress,
-  IconButton,
-  InputAdornment,
+  Alert,
+  Paper,
+  TextField,
 } from '@mui/material';
-import { Visibility, VisibilityOff, Login as LoginIcon } from '@mui/icons-material';
+import { useEffect, useState } from 'react';
+import { fetchSnapshots, ReportingSnapshot } from './api/snapshots';
+import { fetchSnapshotDetails } from './api/snapshotDetails';
 
-function App() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+/* =========================
+   GOVERNANCE STORAGE
+========================= */
 
-  const handleLogin = async () => {
-    if (!email || !password) {
-      setError('Please enter email and password');
-      return;
-    }
+type SnapshotGov = {
+  label?: string;
+  status?: 'draft' | 'final';
+  sealed?: boolean;
+  verified?: boolean;
+  approvals?: string[];
+  restored?: boolean;
+  restoredAt?: string;
+  restoredBy?: string;
+};
 
-    setLoading(true);
-    setError('');
+const GOV_KEY = 'bms.snapshot.governance';
+const PAYLOAD_KEY = 'bms.snapshot.payloads';
 
-    // Simulate API call
-    setTimeout(() => {
-      if (email === 'admin@bms.com' && password === 'Admin123!') {
-        alert('Login successful! Welcome Admin.');
-        // In real app: navigate to dashboard
-      } else if (email === 'seller@bms.com' && password === 'Seller123!') {
-        alert('Login successful! Welcome Seller.');
-      } else {
-        setError('Invalid credentials. Try: admin@bms.com / Admin123!');
-      }
-      setLoading(false);
-    }, 1000);
-  };
+function loadGov(): Record<string, SnapshotGov> {
+  return JSON.parse(localStorage.getItem(GOV_KEY) || '{}');
+}
+function saveGov(v: Record<string, SnapshotGov>) {
+  localStorage.setItem(GOV_KEY, JSON.stringify(v));
+}
 
-  const handleDemoLogin = (demoEmail: string, demoPassword: string) => {
-    setEmail(demoEmail);
-    setPassword(demoPassword);
-    setTimeout(() => handleLogin(), 100);
-  };
+function loadPayloads(): Record<string, any> {
+  return JSON.parse(localStorage.getItem(PAYLOAD_KEY) || '{}');
+}
+function savePayloads(v: Record<string, any>) {
+  localStorage.setItem(PAYLOAD_KEY, JSON.stringify(v));
+}
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleLogin();
-    }
-  };
+/* =========================
+   DASHBOARD (APPROVED ONLY)
+========================= */
+
+function Home() {
+  const [snapshots, setSnapshots] = useState<ReportingSnapshot[]>([]);
+  const gov = loadGov();
+
+  const approved = snapshots.find(
+    s =>
+      gov[s.snapshotId]?.status === 'final' &&
+      gov[s.snapshotId]?.sealed &&
+      gov[s.snapshotId]?.verified &&
+      (gov[s.snapshotId]?.approvals?.length ?? 0) >= 2
+  );
+
+  useEffect(() => {
+    fetchSnapshots().then(setSnapshots);
+  }, []);
 
   return (
-    <Box sx={{
-      minHeight: '100vh',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      p: 2,
-    }}>
-      <Paper sx={{
-        p: 4,
-        width: '100%',
-        maxWidth: 400,
-        borderRadius: 2,
-        boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
-      }}>
-        {/* Logo/Header */}
-        <Box sx={{ textAlign: 'center', mb: 3 }}>
-          <Typography variant="h4" fontWeight="bold" color="primary">
-            BMS Enterprise Suite
+    <Box p={4}>
+      <Typography variant="h4">BMS Enterprise Suite</Typography>
+      <Typography variant="body2">
+        Approved snapshot dashboard (locked)
+      </Typography>
+
+      {!approved && (
+        <Alert severity="info" sx={{ mt: 3 }}>
+          No approved snapshot available.
+        </Alert>
+      )}
+
+      {approved && (
+        <Paper sx={{ p: 3, mt: 3 }}>
+          <Typography variant="h6">Approved Snapshot</Typography>
+          <Typography sx={{ fontFamily: 'monospace' }}>
+            {approved.snapshotId}
           </Typography>
-          <Typography variant="subtitle1" color="text.secondary">
-            Professional Business Management System
-          </Typography>
-        </Box>
-
-        {/* Error Alert */}
-        {error && (
-          <Alert severity="error" sx={{ mb: 2 }}>
-            {error}
-          </Alert>
-        )}
-
-        {/* Login Form */}
-        <Box sx={{ mt: 2 }} onKeyPress={handleKeyPress}>
-          <TextField
-            fullWidth
-            label="Email Address"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            margin="normal"
-            disabled={loading}
-            autoComplete="email"
-            autoFocus
-          />
-
-          <TextField
-            fullWidth
-            label="Password"
-            type={showPassword ? 'text' : 'password'}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            margin="normal"
-            disabled={loading}
-            InputProps={{
-              endAdornment: (
-                <InputAdornment position="end">
-                  <IconButton
-                    onClick={() => setShowPassword(!showPassword)}
-                    edge="end"
-                  >
-                    {showPassword ? <VisibilityOff /> : <Visibility />}
-                  </IconButton>
-                </InputAdornment>
-              ),
-            }}
-            autoComplete="current-password"
-          />
 
           <Button
-            fullWidth
+            sx={{ mt: 2 }}
+            component={Link}
+            to={`/snapshots/${approved.snapshotId}`}
             variant="contained"
-            size="large"
-            onClick={handleLogin}
-            disabled={loading}
-            startIcon={loading ? <CircularProgress size={20} /> : <LoginIcon />}
-            sx={{ mt: 3, py: 1.5 }}
           >
-            {loading ? 'Signing in...' : 'Sign In'}
+            Open Snapshot
           </Button>
-        </Box>
-
-        {/* Demo Accounts */}
-        <Box sx={{ mt: 3, pt: 2, borderTop: 1, borderColor: 'divider' }}>
-          <Typography variant="body2" color="text.secondary" gutterBottom>
-            Demo Accounts (click to auto-fill):
-          </Typography>
-          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => handleDemoLogin('admin@bms.com', 'Admin123!')}
-              disabled={loading}
-            >
-              Admin
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => handleDemoLogin('manager@bms.com', 'Manager123!')}
-              disabled={loading}
-            >
-              Manager
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => handleDemoLogin('seller@bms.com', 'Seller123!')}
-              disabled={loading}
-            >
-              Seller
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => handleDemoLogin('viewer@bms.com', 'Viewer123!')}
-              disabled={loading}
-            >
-              Viewer
-            </Button>
-          </Box>
-        </Box>
-
-        {/* Footer */}
-        <Box sx={{ mt: 4, pt: 2, borderTop: 1, borderColor: 'divider', textAlign: 'center' }}>
-          <Typography variant="caption" color="text.secondary">
-            © 2025 BMS Enterprise Suite • Version 1.0.0
-          </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-            Week 1 Foundation Complete • Built with React + Node.js + TypeScript
-          </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-            Backend: http://localhost:3000 • Frontend: http://localhost:5173
-          </Typography>
-        </Box>
-      </Paper>
+        </Paper>
+      )}
     </Box>
   );
 }
 
-export default App;
+/* =========================
+   SNAPSHOT DETAILS (RESTORE)
+========================= */
+
+function SnapshotDetails() {
+  const { snapshotId } = useParams<{ snapshotId: string }>();
+  const [payload, setPayload] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [gov, setGov] = useState(loadGov());
+  const payloads = loadPayloads();
+
+  const g = snapshotId ? gov[snapshotId] : null;
+
+  useEffect(() => {
+    if (!snapshotId) return;
+
+    // Try backend first
+    fetchSnapshotDetails(snapshotId)
+      .then(setPayload)
+      .catch(() => {
+        // fallback to restored payload
+        if (payloads[snapshotId]) {
+          setPayload(payloads[snapshotId]);
+        }
+      })
+      .finally(() => setLoading(false));
+  }, [snapshotId]);
+
+  const canRestore =
+    g?.status === 'final' &&
+    g?.sealed &&
+    g?.verified &&
+    (g?.approvals?.length ?? 0) >= 2 &&
+    !g?.restored;
+
+  const handleRestore = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const json = JSON.parse(reader.result as string);
+      if (json.snapshotId !== snapshotId) {
+        alert('Snapshot ID mismatch');
+        return;
+      }
+
+      const nextPayloads = {
+        ...payloads,
+        [snapshotId]: json,
+      };
+      savePayloads(nextPayloads);
+
+      const nextGov = {
+        ...gov,
+        [snapshotId]: {
+          ...g,
+          restored: true,
+          restoredAt: new Date().toISOString(),
+          restoredBy: 'local-operator',
+        },
+      };
+      setGov(nextGov);
+      saveGov(nextGov);
+
+      setPayload(json);
+    };
+    reader.readAsText(file);
+  };
+
+  if (!snapshotId) return <Navigate to="/" replace />;
+
+  return (
+    <Box p={4}>
+      <Button component={Link} to="/">Back</Button>
+
+      {loading && <CircularProgress sx={{ mt: 3 }} />}
+
+      {!loading && g && (
+        <Paper sx={{ p: 3, mt: 3 }}>
+          <Typography variant="h5">Snapshot</Typography>
+          <Typography sx={{ fontFamily: 'monospace' }}>
+            {snapshotId}
+          </Typography>
+
+          {g.restored && (
+            <Alert severity="warning" sx={{ mt: 2 }}>
+              RESTORED — VIEW ONLY — NOT SOURCE OF TRUTH
+              <br />
+              Restored at: {g.restoredAt}
+            </Alert>
+          )}
+
+          {canRestore && (
+            <Alert severity="info" sx={{ mt: 2 }}>
+              Backend payload missing. You may restore from archive.
+              <br />
+              <input
+                type="file"
+                accept="application/json"
+                onChange={(e) =>
+                  e.target.files && handleRestore(e.target.files[0])
+                }
+              />
+            </Alert>
+          )}
+
+          {payload && (
+            <Paper sx={{ p: 2, mt: 3 }}>
+              <pre>{JSON.stringify(payload, null, 2)}</pre>
+            </Paper>
+          )}
+        </Paper>
+      )}
+    </Box>
+  );
+}
+
+/* =========================
+   ROUTES
+========================= */
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<Home />} />
+      <Route path="/snapshots/:snapshotId" element={<SnapshotDetails />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}

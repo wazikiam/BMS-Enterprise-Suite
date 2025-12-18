@@ -12,14 +12,14 @@ import { LedgerBalanceError } from './LedgerBalanceError';
  *
  * Rules:
  * - Operates on immutable LedgerEntry facts
- * - Filters by account, currency, and asOf
+ * - Filters by accountCode, currency, and asOf
  * - Debit increases balance
  * - Credit decreases balance
  * - NEVER infers "current" without asOf
  */
 export class LedgerBalanceCalculator {
   static calculate(params: {
-    accountId: string;
+    accountCode: string;
     currency: string;
     asOf: Date;
     entries: readonly LedgerEntry[];
@@ -28,7 +28,7 @@ export class LedgerBalanceCalculator {
     let creditTotal = 0;
 
     for (const entry of params.entries) {
-      if (entry.accountId !== params.accountId) continue;
+      if (entry.accountCode !== params.accountCode) continue;
       if (entry.currency !== params.currency) continue;
       if (entry.occurredAt > params.asOf) continue;
 
@@ -50,7 +50,7 @@ export class LedgerBalanceCalculator {
     }
 
     return {
-      accountId: params.accountId,
+      accountId: params.accountCode,
       currency: params.currency,
       debitTotal,
       creditTotal,

@@ -8,16 +8,13 @@ import { createReportingProvider } from '../../api/reportingProvider';
 const router = Router();
 
 /**
- * Reporting provider composition.
- * This wires core reporting logic to infrastructure adapters.
+ * Reporting provider (SHARED snapshot store).
  */
 const reportingProvider = createReportingProvider();
 
 /**
- * Generate and persist a new reporting snapshot.
- *
- * This endpoint is generation-only.
- * Querying semantics are handled separately.
+ * POST /api/reports/snapshots
+ * Generate a new reporting snapshot.
  */
 router.post('/snapshots', async (req, res, next) => {
   try {
@@ -52,19 +49,41 @@ router.post('/snapshots', async (req, res, next) => {
 });
 
 /**
- * Snapshot retrieval endpoint.
- *
- * Temporarily disabled.
- * Proper period-based querying and supersession semantics
- * will be introduced in Week 13.
+ * GET /api/reports/snapshots
+ * List ALL snapshots (read-only).
  */
-router.get('/snapshots/latest', async (_req, res) => {
-  res.status(501).json({
-    error: 'Not implemented',
-    reason:
-      'Snapshot querying is disabled. ' +
-      'Period-aware and version-safe querying will be implemented in Week 13.',
-  });
+router.get('/snapshots', async (_req, res) => {
+  const snapshots = await reportingProvider.snapshotRepository.list();
+
+  res.json(
+    snapshots.map((s) => ({
+      snapshotId: s.snapshotId,
+      periodFrom: s.period.from,
+      periodTo: s.period.to,
+      asOf: s.asOf,
+      generatedAt: s.generatedAt,
+    }))
+  );
+});
+
+/**
+ * GET /api/reports/snapshots/:snapshotId
+ * Fetch ONE snapshot by ID.
+ */
+router.get('/snapshots/:snapshotId', async (req, res) => {
+  const { snapshotId } = req.params;
+
+  const snapshot =
+    await reportingProvider.snapshotRepository.getById(snapshotId);
+
+  if (!snapshot) {
+    return res.status(404).json({
+      error: 'Snapshot not found',
+      snapshotId,
+    });
+  }
+
+  res.json(snapshot);
 });
 
 export default router;

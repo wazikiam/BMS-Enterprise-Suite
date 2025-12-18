@@ -1,72 +1,308 @@
 // packages/server/src/index.ts
+// BMS ENTERPRISE SUITE — SERVER ENTRYPOINT
+// Governance-grade, fail-closed, audit-first
 
 import express from 'express';
 import cors from 'cors';
 
+// ─────────────────────────────────────────────────────────────
+// STARTUP GUARD — FAIL FAST IF GOVERNANCE IS BROKEN
+// ─────────────────────────────────────────────────────────────
+
+import { StartupGuard } from './startup/startupGuard';
+StartupGuard.enforce();
+
+// ─────────────────────────────────────────────────────────────
+// Actor injection (explicit, fail-closed)
+// ─────────────────────────────────────────────────────────────
+
+import { actorInjectionMiddleware } from './middleware/actorInjection.middleware';
+
+// ─────────────────────────────────────────────────────────────
+// Request instrumentation
+// ─────────────────────────────────────────────────────────────
+
+import { requestMetricsMiddleware } from './middleware/requestMetrics.middleware';
+
+// ─────────────────────────────────────────────────────────────
+// Operations (health / readiness / metrics)
+// ─────────────────────────────────────────────────────────────
+
+import operationsRoutes from './api/operations/operations.routes';
+
+// ─────────────────────────────────────────────────────────────
+// HR
+// ─────────────────────────────────────────────────────────────
+
+import hrRoutes from './hr/hr.routes';
+
+// ─────────────────────────────────────────────────────────────
 // Reporting
+// ─────────────────────────────────────────────────────────────
+
 import reportingRouter from './routes/reporting';
 
-// Ledger balance (read-only, period-based)
+// ─────────────────────────────────────────────────────────────
+// Ledger WRITE (APPEND-ONLY, IDEMPOTENT)
+// ─────────────────────────────────────────────────────────────
+
+import { createLedgerRoutes } from './api/ledger.routes';
+
+// ─────────────────────────────────────────────────────────────
+// Ledger balance (READ-ONLY, PERIOD-AWARE)
+// ─────────────────────────────────────────────────────────────
+
 import { createLedgerBalanceProvider } from './api/ledgerBalanceProvider';
 import { createLedgerBalanceRoutes } from './api/ledgerBalance.routes';
 
-// Ledger balance (snapshot-consistent, read-only)
+// ─────────────────────────────────────────────────────────────
+// Ledger balance (READ-ONLY, SNAPSHOT-CONSISTENT)
+// ─────────────────────────────────────────────────────────────
+
 import { LedgerBalanceSnapshotService } from './api/LedgerBalanceSnapshotService';
 import { LedgerBalanceSnapshotController } from './api/LedgerBalanceSnapshotController';
 import { ledgerBalanceSnapshotRoutes } from './api/ledgerBalanceSnapshot.routes';
 
-// Reporting snapshot repository
-import { ReportingSnapshotRepository } from './api/ReportingSnapshotRepository';
+import { reportingSnapshotReaderAdapter } from './api/ReportingSnapshotReaderAdapter';
+import { LedgerAccountIndex } from './api/LedgerAccountIndex';
+import { PostgresLedgerBalanceRepository } from './api/PostgresLedgerBalanceRepository';
+
+// ─────────────────────────────────────────────────────────────
+// Trial Balance (READ-ONLY, PERIOD-AWARE)
+// ─────────────────────────────────────────────────────────────
+
+import { PostgresTrialBalanceRepository } from './api/PostgresTrialBalanceRepository';
+import { TrialBalanceReadService } from './api/TrialBalanceReadService';
+import { TrialBalanceController } from './api/TrialBalanceController';
+import { createTrialBalanceRoutes } from './api/trialBalance.routes';
+
+// ─────────────────────────────────────────────────────────────
+// Finance Periods (READ + COMMAND)
+// ─────────────────────────────────────────────────────────────
+
+import financePeriodReadRoutes from './api/financePeriods.read.routes';
+import financePeriodCommandRoutes from './api/financePeriods.command.routes';
+
+// ─────────────────────────────────────────────────────────────
+// Financial Snapshots (READ-ONLY)
+// ─────────────────────────────────────────────────────────────
+
+import { createFinancialSnapshotReadRoutes } from './api/financialSnapshots.routes';
+
+// ─────────────────────────────────────────────────────────────
+// Internal Snapshot Vault (OPERATOR ONLY)
+// ─────────────────────────────────────────────────────────────
+
+import { createSnapshotVaultRouter } from './api/internal/snapshotVault.routes';
+import { SnapshotVaultController } from './api/internal/snapshotVault.controller';
+
+import { createSnapshotVaultAuditRouter } from './api/internal/snapshotVaultAudit.routes';
+import { SnapshotVaultAuditController } from './api/internal/snapshotVaultAudit.controller';
+
+import { createSnapshotVaultRetentionRouter } from './api/internal/snapshotVaultRetention.routes';
+import { SnapshotVaultRetentionController } from './api/internal/snapshotVaultRetention.controller';
+
+import { createSnapshotVaultDeletionRouter } from './api/internal/snapshotVaultDeletion.routes';
+import { SnapshotVaultDeletionController } from './api/internal/snapshotVaultDeletion.controller';
+
+import { ReportingSnapshotVaultService } from './reporting/vault/ReportingSnapshotVaultService';
+import { ReportingSnapshotRestoreService } from './reporting/vault/ReportingSnapshotRestoreService';
+import { SnapshotVaultAuditReadService } from './reporting/vault/SnapshotVaultAuditReadService';
+import { SnapshotVaultRetentionService } from './reporting/vault/SnapshotVaultRetentionService';
+import { SnapshotVaultDeletionService } from './reporting/vault/SnapshotVaultDeletionService';
+
+// ─────────────────────────────────────────────────────────────
+// Infrastructure
+// ─────────────────────────────────────────────────────────────
+
+import { getPostgresPool } from './db/PostgresClient';
+import { runtimeSnapshotStore } from './reporting/runtime/runtimeSnapshotStore';
+import { requireOperatorRole } from './security/requireOperatorRole';
+
+// ─────────────────────────────────────────────────────────────
 
 const app = express();
-const PORT = Number(process.env.PORT ?? 3000);
+const PORT = Number(process.env.PORT ?? 3001);
 
 app.use(cors());
 app.use(express.json());
 
-app.get('/health', (_req, res) => {
-  res.status(200).json({ status: 'ok' });
-});
+// Actor injection MUST be first
+app.use(actorInjectionMiddleware);
 
-// Reporting API
+// Request metrics
+app.use(requestMetricsMiddleware);
+
+// ─────────────────────────────────────────────────────────────
+// Operations
+// ─────────────────────────────────────────────────────────────
+
+app.use('/', operationsRoutes);
+
+// ─────────────────────────────────────────────────────────────
+// Shared Postgres pool (single instance)
+// ─────────────────────────────────────────────────────────────
+
+const pool = getPostgresPool();
+
+// ─────────────────────────────────────────────────────────────
+// INTERNAL SNAPSHOT VAULT (OPERATOR ONLY)
+// ─────────────────────────────────────────────────────────────
+
+const snapshotVaultService = new ReportingSnapshotVaultService(
+  pool,
+  runtimeSnapshotStore
+);
+
+const snapshotRestoreService = new ReportingSnapshotRestoreService(
+  pool,
+  runtimeSnapshotStore
+);
+
+const snapshotVaultAuditReadService = new SnapshotVaultAuditReadService(pool);
+
+const snapshotVaultRetentionService = new SnapshotVaultRetentionService(pool);
+
+const snapshotVaultDeletionService = new SnapshotVaultDeletionService(pool);
+
+const snapshotVaultController = new SnapshotVaultController(
+  snapshotVaultService,
+  snapshotRestoreService
+);
+
+const snapshotVaultAuditController = new SnapshotVaultAuditController(
+  snapshotVaultAuditReadService
+);
+
+const snapshotVaultRetentionController = new SnapshotVaultRetentionController(
+  snapshotVaultRetentionService
+);
+
+const snapshotVaultDeletionController = new SnapshotVaultDeletionController(
+  snapshotVaultDeletionService
+);
+
+app.use(
+  '/internal',
+  requireOperatorRole,
+  createSnapshotVaultRouter(snapshotVaultController),
+  createSnapshotVaultAuditRouter(snapshotVaultAuditController),
+  createSnapshotVaultRetentionRouter(snapshotVaultRetentionController),
+  createSnapshotVaultDeletionRouter(snapshotVaultDeletionController)
+);
+
+// ─────────────────────────────────────────────────────────────
+// HR API
+// ─────────────────────────────────────────────────────────────
+
+app.use('/api/hr', hrRoutes);
+
+// ─────────────────────────────────────────────────────────────
+// REPORTING API
+// ─────────────────────────────────────────────────────────────
+
 app.use('/api/reports', reportingRouter);
 
 // ─────────────────────────────────────────────────────────────
-// Ledger balance API (READ-ONLY, period-aware)
+// FINANCE PERIOD APIs (READ + COMMAND)
+// ─────────────────────────────────────────────────────────────
+
+app.use('/api/finance', financePeriodReadRoutes);
+app.use('/api/finance', financePeriodCommandRoutes);
+
+// ─────────────────────────────────────────────────────────────
+// FINANCIAL SNAPSHOT READ API (IMMUTABLE)
+// ─────────────────────────────────────────────────────────────
+
+app.use('/api/finance/snapshots', createFinancialSnapshotReadRoutes());
+
+// ─────────────────────────────────────────────────────────────
+// LEDGER WRITE API
+// ─────────────────────────────────────────────────────────────
+
+app.use('/api/ledger', createLedgerRoutes());
+
+// ─────────────────────────────────────────────────────────────
+// LEDGER BALANCE API (READ-ONLY, PERIOD-AWARE)
 // ─────────────────────────────────────────────────────────────
 
 const ledgerBalanceProvider = createLedgerBalanceProvider();
-app.use('/api/ledger', createLedgerBalanceRoutes(ledgerBalanceProvider));
-
-// ─────────────────────────────────────────────────────────────
-// Ledger balance API (READ-ONLY, snapshot-consistent)
-// ─────────────────────────────────────────────────────────────
-
-const reportingSnapshotRepository = new ReportingSnapshotRepository();
-
-const ledgerBalanceSnapshotService = new LedgerBalanceSnapshotService(
-  reportingSnapshotRepository,
-  ledgerBalanceProvider.ledgerBalanceQuery
-);
-
-const ledgerBalanceSnapshotController =
-  new LedgerBalanceSnapshotController(ledgerBalanceSnapshotService);
 
 app.use(
   '/api/ledger',
-  ledgerBalanceSnapshotRoutes(ledgerBalanceSnapshotController)
+  createLedgerBalanceRoutes(
+    ledgerBalanceProvider,
+    ledgerBalanceProvider.financialPeriodReadModel
+  )
 );
 
+// ─────────────────────────────────────────────────────────────
+// LEDGER BALANCE API (READ-ONLY, SNAPSHOT-CONSISTENT)
+// ─────────────────────────────────────────────────────────────
+
+const ledgerAccountIndex = new LedgerAccountIndex(pool);
+const ledgerBalanceRepository = new PostgresLedgerBalanceRepository(pool);
+
+const snapshotLedgerReadPort = {
+  async getBalance(params: { periodFrom?: Date; periodTo?: Date; asOf: Date }) {
+    try {
+      const accountRefs = await ledgerAccountIndex.listAccounts();
+      const balances = [];
+
+      for (const ref of accountRefs) {
+        const balance = await ledgerBalanceRepository.getAccountBalance({
+          accountId: ref.accountId,
+          currency: ref.currency,
+          asOf: params.asOf,
+        });
+
+        balances.push(balance);
+      }
+
+      return { balances };
+    } catch {
+      return {
+        balances: [],
+        warning: 'Ledger read unavailable (infrastructure error)',
+      };
+    }
+  },
+};
+
+const ledgerBalanceSnapshotService = new LedgerBalanceSnapshotService(
+  reportingSnapshotReaderAdapter,
+  snapshotLedgerReadPort
+);
+
+const ledgerBalanceSnapshotController = new LedgerBalanceSnapshotController(
+  ledgerBalanceSnapshotService
+);
+
+app.use('/api/ledger', ledgerBalanceSnapshotRoutes(ledgerBalanceSnapshotController));
+
+// ─────────────────────────────────────────────────────────────
+// TRIAL BALANCE API (READ-ONLY, PERIOD-AWARE)
+// ─────────────────────────────────────────────────────────────
+
+const trialBalanceRepository = new PostgresTrialBalanceRepository(pool);
+const trialBalanceReadService = new TrialBalanceReadService(trialBalanceRepository);
+const trialBalanceController = new TrialBalanceController(trialBalanceReadService);
+
+app.use('/api/ledger', createTrialBalanceRoutes(trialBalanceController));
+
+// ─────────────────────────────────────────────────────────────
+// SERVER START
+// ─────────────────────────────────────────────────────────────
+
 app.listen(PORT, () => {
-  // Keep logs simple and stable for Windows
   console.log('╔══════════════════════════════════════════════════════════════╗');
   console.log('║         BMS Enterprise Suite Server Started                 ║');
   console.log('╠══════════════════════════════════════════════════════════════╣');
-  console.log('║                                                              ║');
   console.log(`║  Server:   http://localhost:${PORT}                               ║`);
   console.log(`║  Health:   http://localhost:${PORT}/health                       ║`);
-  console.log(`║  API:      http://localhost:${PORT}/api                          ║`);
-  console.log('║                                                              ║');
+  console.log(`║  Ready:    http://localhost:${PORT}/ready                        ║`);
+  console.log(`║  Metrics:  http://localhost:${PORT}/metrics                      ║`);
+  console.log(`║  HR API:   http://localhost:${PORT}/api/hr                       ║`);
   console.log('╚══════════════════════════════════════════════════════════════╝');
 });
 
