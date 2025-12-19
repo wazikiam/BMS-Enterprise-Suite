@@ -68,13 +68,12 @@ import { LedgerAccountIndex } from './api/LedgerAccountIndex';
 import { PostgresLedgerBalanceRepository } from './api/PostgresLedgerBalanceRepository';
 
 // ─────────────────────────────────────────────────────────────
-// Trial Balance (READ-ONLY, PERIOD-AWARE)
+// Trial Balance (READ-ONLY, PERIOD-AWARE) — CANONICAL
 // ─────────────────────────────────────────────────────────────
 
-import { PostgresTrialBalanceRepository } from './api/PostgresTrialBalanceRepository';
-import { TrialBalanceReadService } from './api/TrialBalanceReadService';
 import { TrialBalanceController } from './api/TrialBalanceController';
 import { createTrialBalanceRoutes } from './api/trialBalance.routes';
+import { PostgresTrialBalanceReadService } from './services/TrialBalanceReadService';
 
 // ─────────────────────────────────────────────────────────────
 // Finance Periods (READ + COMMAND)
@@ -160,9 +159,7 @@ const snapshotRestoreService = new ReportingSnapshotRestoreService(
 );
 
 const snapshotVaultAuditReadService = new SnapshotVaultAuditReadService(pool);
-
 const snapshotVaultRetentionService = new SnapshotVaultRetentionService(pool);
-
 const snapshotVaultDeletionService = new SnapshotVaultDeletionService(pool);
 
 const snapshotVaultController = new SnapshotVaultController(
@@ -281,11 +278,10 @@ const ledgerBalanceSnapshotController = new LedgerBalanceSnapshotController(
 app.use('/api/ledger', ledgerBalanceSnapshotRoutes(ledgerBalanceSnapshotController));
 
 // ─────────────────────────────────────────────────────────────
-// TRIAL BALANCE API (READ-ONLY, PERIOD-AWARE)
+// TRIAL BALANCE API (READ-ONLY, PERIOD-AWARE) — CANONICAL
 // ─────────────────────────────────────────────────────────────
 
-const trialBalanceRepository = new PostgresTrialBalanceRepository(pool);
-const trialBalanceReadService = new TrialBalanceReadService(trialBalanceRepository);
+const trialBalanceReadService = new PostgresTrialBalanceReadService(pool);
 const trialBalanceController = new TrialBalanceController(trialBalanceReadService);
 
 app.use('/api/ledger', createTrialBalanceRoutes(trialBalanceController));
