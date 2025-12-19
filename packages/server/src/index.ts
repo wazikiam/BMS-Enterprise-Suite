@@ -87,6 +87,8 @@ import financePeriodCommandRoutes from './api/financePeriods.command.routes';
 // ─────────────────────────────────────────────────────────────
 
 import arReadRoutes from './api/ar.read.routes';
+import arInvoiceReadRoutes from './api/ar.invoice.read.routes';
+import arAgingReadRoutes from './api/ar.aging.read.routes';
 
 // ─────────────────────────────────────────────────────────────
 // Financial Snapshots (READ-ONLY)
@@ -218,6 +220,8 @@ app.use('/api/finance', financePeriodCommandRoutes);
 // ─────────────────────────────────────────────────────────────
 
 app.use('/api/ar', arReadRoutes);
+app.use('/api/ar', arInvoiceReadRoutes);
+app.use('/api/ar', arAgingReadRoutes);
 
 // ─────────────────────────────────────────────────────────────
 // FINANCIAL SNAPSHOT READ API (IMMUTABLE)
