@@ -83,6 +83,12 @@ import financePeriodReadRoutes from './api/financePeriods.read.routes';
 import financePeriodCommandRoutes from './api/financePeriods.command.routes';
 
 // ─────────────────────────────────────────────────────────────
+// Accounts Receivable (READ-ONLY)
+// ─────────────────────────────────────────────────────────────
+
+import arReadRoutes from './api/ar.read.routes';
+
+// ─────────────────────────────────────────────────────────────
 // Financial Snapshots (READ-ONLY)
 // ─────────────────────────────────────────────────────────────
 
@@ -206,6 +212,12 @@ app.use('/api/reports', reportingRouter);
 
 app.use('/api/finance', financePeriodReadRoutes);
 app.use('/api/finance', financePeriodCommandRoutes);
+
+// ─────────────────────────────────────────────────────────────
+// ACCOUNTS RECEIVABLE (READ-ONLY)
+// ─────────────────────────────────────────────────────────────
+
+app.use('/api/ar', arReadRoutes);
 
 // ─────────────────────────────────────────────────────────────
 // FINANCIAL SNAPSHOT READ API (IMMUTABLE)
