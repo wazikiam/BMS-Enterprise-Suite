@@ -7,7 +7,7 @@
 // - Fail-closed on infrastructure errors
 
 import { Request, Response } from 'express';
-import { TrialBalanceReadService } from './TrialBalanceReadService';
+import { PostgresTrialBalanceReadService } from '../services/TrialBalanceReadService';
 
 function parseIsoDate(value: unknown, field: string): Date {
   if (typeof value !== 'string') {
@@ -22,7 +22,7 @@ function parseIsoDate(value: unknown, field: string): Date {
 
 export class TrialBalanceController {
   constructor(
-    private readonly service: TrialBalanceReadService
+    private readonly service: PostgresTrialBalanceReadService
   ) {}
 
   async getTrialBalance(req: Request, res: Response): Promise<void> {

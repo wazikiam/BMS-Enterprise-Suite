@@ -1,54 +1,32 @@
 // packages/server/src/ar/PostgresARInvoiceEventRepository.ts
-// ACCOUNTS RECEIVABLE — INVOICE EVENT REPOSITORY (APPEND-ONLY)
+// Postgres event repository for AR invoices (append-only)
 //
-// - Writes immutable AR invoice events
-// - Reads full event streams by invoice
-// - NO updates
-// - NO deletes
-// - Infrastructure-only (no business logic)
+// Contract:
+// - DB uses snake_case columns
+// - App uses camelCase records
+// - This repo is the ONLY DB boundary for AR invoice events
 
-import { ARInvoiceEvent } from '@bms/core/src/ar/AccountsReceivable';
+import { Pool } from 'pg';
 
-export interface SqlClient {
-  query<T = any>(
-    text: string,
-    params?: any[]
-  ): Promise<{ rows: T[] }>;
-}
-
-type ARInvoiceEventRow = {
-  event_id: string;
-  invoice_id: string;
-  event_type: string;
-  actor_id: string;
-  actor_roles: string[];
-  reason: string;
-  event_time: string;
+export type ARInvoiceEventRecord = {
+  eventId: string;
+  invoiceId: string;
+  eventType: string;
   payload: any;
+  eventTime: Date;
 };
 
 export class PostgresARInvoiceEventRepository {
-  constructor(private readonly db: SqlClient) {}
+  constructor(private readonly pool: Pool) {}
 
-  /**
-   * Append a single AR invoice event.
-   *
-   * NOTE:
-   * - Caller is responsible for validation
-   * - This method enforces append-only semantics
-   */
-  async append(
-    eventId: string,
-    invoiceId: string,
-    event: ARInvoiceEvent,
-    actor: {
-      actorId: string;
-      actorRoles: readonly string[];
-    },
-    reason: string
-  ): Promise<void> {
+  async append(params: {
+    eventId: string;
+    invoiceId: string;
+    eventType: string;
+    payload: any;
+  }): Promise<void> {
     const sql = `
-      INSERT INTO public.ar_invoice_events (
+      INSERT INTO ar_invoice_events (
         event_id,
         invoice_id,
         event_type,
@@ -58,51 +36,75 @@ export class PostgresARInvoiceEventRepository {
         event_time,
         payload
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8
-      );
+        $1, $2, $3,
+        $4, $5,
+        $6,
+        now(),
+        $7::jsonb
+      )
     `;
 
-    const params = [
-      eventId,
-      invoiceId,
-      event.type,
-      actor.actorId,
-      actor.actorRoles,
+    // Governance-safe defaults for DEV/READ flows:
+    // Command-side can remain business-intent-only.
+    const actorId = 'system';
+    const actorRoles = ['SYSTEM'];
+    const reason = 'system';
+
+    await this.pool.query(sql, [
+      params.eventId,
+      params.invoiceId,
+      params.eventType,
+      actorId,
+      actorRoles,
       reason,
-      event.occurredAt.toISOString(),
-      event,
-    ];
-
-    await this.db.query(sql, params);
+      JSON.stringify(params.payload ?? {}),
+    ]);
   }
 
-  /**
-   * List all AR invoice events for a given invoice.
-   *
-   * Ordered deterministically by event_time ASC.
-   */
-  async listByInvoice(
-    invoiceId: string
-  ): Promise<ARInvoiceEvent[]> {
+  async listByInvoice(invoiceId: string): Promise<ARInvoiceEventRecord[]> {
     const sql = `
-      SELECT *
-      FROM public.ar_invoice_events
+      SELECT
+        event_id,
+        invoice_id,
+        event_type,
+        event_time,
+        payload
+      FROM ar_invoice_events
       WHERE invoice_id = $1
-      ORDER BY event_time ASC;
+      ORDER BY event_time ASC
     `;
 
-    const result = await this.db.query<ARInvoiceEventRow>(
-      sql,
-      [invoiceId]
-    );
+    const { rows } = await this.pool.query(sql, [invoiceId]);
 
-    return result.rows.map(this.mapRow);
+    return rows.map((r) => ({
+      eventId: r.event_id,
+      invoiceId: r.invoice_id,
+      eventType: r.event_type,
+      eventTime: new Date(r.event_time),
+      payload: r.payload ?? {},
+    }));
   }
 
-  private mapRow(row: ARInvoiceEventRow): ARInvoiceEvent {
-    return {
-      ...row.payload,
-      occurredAt: new Date(row.event_time),
-    } as ARInvoiceEvent;
+  async listAllEvents(): Promise<ARInvoiceEventRecord[]> {
+    const sql = `
+      SELECT
+        event_id,
+        invoice_id,
+        event_type,
+        event_time,
+        payload
+      FROM ar_invoice_events
+      ORDER BY invoice_id ASC, event_time ASC
+    `;
+
+    const { rows } = await this.pool.query(sql);
+
+    return rows.map((r) => ({
+      eventId: r.event_id,
+      invoiceId: r.invoice_id,
+      eventType: r.event_type,
+      eventTime: new Date(r.event_time),
+      payload: r.payload ?? {},
+    }));
   }
 }

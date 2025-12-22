@@ -6,6 +6,9 @@
 // - No mutations
 // - Actor headers required
 // - Deterministic rendering
+//
+// IMPORTANT:
+// - Use absolute API base to avoid Vite returning index.html (Unexpected token '<')
 
 import { useEffect, useState } from 'react';
 
@@ -20,6 +23,8 @@ type ARInvoice = {
   dueDate?: string;
 };
 
+const API_BASE = 'http://localhost:3001';
+
 export default function ARInvoicesPage() {
   const [invoices, setInvoices] = useState<ARInvoice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -28,7 +33,7 @@ export default function ARInvoicesPage() {
   useEffect(() => {
     async function load() {
       try {
-        const res = await fetch('/api/ar/invoices', {
+        const res = await fetch(`${API_BASE}/api/ar/invoices`, {
           headers: {
             'X-Actor-Id': 'admin',
             'X-Actor-Roles': 'ADMIN',
@@ -36,13 +41,14 @@ export default function ARInvoicesPage() {
         });
 
         if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
+          const text = await res.text().catch(() => '');
+          throw new Error(`HTTP ${res.status}${text ? `: ${text}` : ''}`);
         }
 
         const data = await res.json();
         setInvoices(data.invoices ?? []);
       } catch (e: any) {
-        setError(e.message ?? 'Failed to load AR invoices');
+        setError(e?.message ?? 'Failed to load AR invoices');
       } finally {
         setLoading(false);
       }
@@ -100,9 +106,7 @@ export default function ARInvoicesPage() {
                 <td>{inv.status}</td>
                 <td>{new Date(inv.issuedAt).toLocaleDateString()}</td>
                 <td>
-                  {inv.dueDate
-                    ? new Date(inv.dueDate).toLocaleDateString()
-                    : '-'}
+                  {inv.dueDate ? new Date(inv.dueDate).toLocaleDateString() : '-'}
                 </td>
               </tr>
             ))}

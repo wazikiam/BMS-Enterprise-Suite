@@ -1,174 +1,107 @@
 // packages/server/src/ar/ARInvoiceCommandService.ts
-// ACCOUNTS RECEIVABLE — INVOICE COMMAND SERVICE
-//
-// Phase 3.3: Command handling + persistence
-//
-// Characteristics:
-// - Event-sourced
-// - Append-only
-// - Deterministic
-// - Internal-only
-// - Ledger integration on ISSUE only
+// COMMAND SIDE — Accounts Receivable (Invoices)
+// Strict separation:
+// - Commands emit business intent only
+// - Repository injects audit metadata
+// - Domain reducer stays pure
 
-import crypto from 'crypto';
-import { Pool } from 'pg';
-
+import { randomUUID } from 'crypto';
 import {
-  ARInvoiceEvent,
-  ARInvoiceStatus,
   applyARInvoiceEvent,
-  CreateARInvoiceCommand,
-  IssueARInvoiceCommand,
-  VoidARInvoiceCommand,
+  ARInvoiceEvent,
+  ARInvoiceState,
 } from '@bms/core/src/ar/AccountsReceivable';
-
 import { PostgresARInvoiceEventRepository } from './PostgresARInvoiceEventRepository';
-import { ARLedgerIntegrationService } from './ARLedgerIntegrationService';
-import { LedgerWriteActor } from '@bms/core/src/ledger/LedgerWriteGateway';
+import { mapARInvoiceEvent } from './mapARInvoiceEvent';
 
 export class ARInvoiceCommandService {
-  private readonly repo: PostgresARInvoiceEventRepository;
-  private readonly ledgerIntegration: ARLedgerIntegrationService;
+  constructor(
+    private readonly repo: PostgresARInvoiceEventRepository
+  ) {}
 
-  constructor(private readonly pool: Pool) {
-    this.repo = new PostgresARInvoiceEventRepository(pool);
-    this.ledgerIntegration = new ARLedgerIntegrationService(pool);
-  }
+  private async loadState(
+    invoiceId: string
+  ): Promise<ARInvoiceState | undefined> {
+    const records = await this.repo.listByInvoice(invoiceId);
 
-  // ─────────────────────────────────────────────────────────────
-  // CREATE
-  // ─────────────────────────────────────────────────────────────
+    const domainEvents: ARInvoiceEvent[] =
+      records.map(mapARInvoiceEvent);
 
-  async createInvoice(
-    cmd: CreateARInvoiceCommand,
-    actor: LedgerWriteActor
-  ): Promise<void> {
-    const event: ARInvoiceEvent = {
-      type: 'AR_INVOICE_CREATED',
-      invoiceId: cmd.invoiceId,
-      customerId: cmd.customerId,
-      currency: cmd.currency,
-      totalAmount: this.computeTotal(cmd.lines),
-      occurredAt: new Date(),
-    };
-
-    await this.appendEvent(cmd.invoiceId, event, actor, 'Invoice created');
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // ISSUE
-  // ─────────────────────────────────────────────────────────────
-
-  async issueInvoice(
-    cmd: IssueARInvoiceCommand,
-    context: {
-      totalAmount: string;
-      currency: string;
-    },
-    actor: LedgerWriteActor
-  ): Promise<void> {
-    const state = await this.loadState(cmd.invoiceId);
-
-    if (state.status !== ARInvoiceStatus.DRAFT) {
-      throw new Error('Only DRAFT invoices can be issued');
-    }
-
-    const event: ARInvoiceEvent = {
-      type: 'AR_INVOICE_ISSUED',
-      invoiceId: cmd.invoiceId,
-      issuedAt: cmd.issuedAt,
-      occurredAt: new Date(),
-    };
-
-    await this.appendEvent(
-      cmd.invoiceId,
-      event,
-      actor,
-      'Invoice issued'
-    );
-
-    // Ledger side-effect (explicit, deterministic)
-    await this.ledgerIntegration.applyIssuedInvoice(
-      event,
-      context,
-      actor
-    );
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // VOID
-  // ─────────────────────────────────────────────────────────────
-
-  async voidInvoice(
-    cmd: VoidARInvoiceCommand,
-    actor: LedgerWriteActor
-  ): Promise<void> {
-    const state = await this.loadState(cmd.invoiceId);
-
-    if (state.status === ARInvoiceStatus.VOIDED) {
-      throw new Error('Invoice already voided');
-    }
-
-    const event: ARInvoiceEvent = {
-      type: 'AR_INVOICE_VOIDED',
-      invoiceId: cmd.invoiceId,
-      reason: cmd.reason,
-      occurredAt: new Date(),
-    };
-
-    await this.appendEvent(
-      cmd.invoiceId,
-      event,
-      actor,
-      'Invoice voided'
-    );
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // INTERNAL HELPERS
-  // ─────────────────────────────────────────────────────────────
-
-  private async loadState(invoiceId: string) {
-    const events = await this.repo.listByInvoice(invoiceId);
-
-    return events.reduce(
+    return domainEvents.reduce(
       (state, event) => applyARInvoiceEvent(state, event),
-      undefined as any
+      undefined as ARInvoiceState | undefined
     );
   }
 
-  private async appendEvent(
-    invoiceId: string,
-    event: ARInvoiceEvent,
-    actor: LedgerWriteActor,
-    reason: string
-  ): Promise<void> {
-    const eventId = crypto
-      .randomUUID();
+  async createInvoice(params: {
+    invoiceId?: string;
+    customerId: string;
+    currency: string;
+    totalAmount: string;
+  }): Promise<string> {
+    const invoiceId = params.invoiceId ?? randomUUID();
 
-    await this.repo.append(
-      eventId,
+    await this.repo.append({
+      eventId: randomUUID(),
       invoiceId,
-      event,
-      {
-        actorId: actor.actorId,
-        actorRoles: actor.roles,
+      eventType: 'AR_INVOICE_CREATED',
+      payload: {
+        customerId: params.customerId,
+        currency: params.currency,
+        totalAmount: params.totalAmount,
       },
-      reason
-    );
+    });
+
+    return invoiceId;
   }
 
-  private computeTotal(
-    lines: CreateARInvoiceCommand['lines']
-  ): string {
-    const total = lines.reduce((sum, line) => {
-      return sum + Number(line.lineTotal);
-    }, 0);
+  async issueInvoice(params: {
+    invoiceId: string;
+    issuedAt: Date;
+    dueDate?: Date;
+  }): Promise<void> {
+    const state = await this.loadState(params.invoiceId);
 
-    if (Number.isNaN(total) || total <= 0) {
-      throw new Error('Invalid invoice total');
+    if (!state) {
+      throw new Error('Invoice does not exist');
     }
 
-    return total.toFixed(2);
+    if (state.status !== 'DRAFT') {
+      throw new Error('Invoice must be in DRAFT state to be issued');
+    }
+
+    await this.repo.append({
+      eventId: randomUUID(),
+      invoiceId: params.invoiceId,
+      eventType: 'AR_INVOICE_ISSUED',
+      payload: {
+        issuedAt: params.issuedAt.toISOString(),
+        dueDate: params.dueDate?.toISOString(),
+      },
+    });
+  }
+
+  async voidInvoice(params: {
+    invoiceId: string;
+    reason: string;
+  }): Promise<void> {
+    const state = await this.loadState(params.invoiceId);
+
+    if (!state) {
+      throw new Error('Invoice does not exist');
+    }
+
+    if (state.status === 'VOIDED') {
+      return;
+    }
+
+    await this.repo.append({
+      eventId: randomUUID(),
+      invoiceId: params.invoiceId,
+      eventType: 'AR_INVOICE_VOIDED',
+      payload: {
+        reason: params.reason,
+      },
+    });
   }
 }

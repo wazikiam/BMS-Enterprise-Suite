@@ -2,6 +2,8 @@
 // BMS ENTERPRISE SUITE — SERVER ENTRYPOINT
 // Governance-grade, fail-closed, audit-first
 
+import 'dotenv/config';
+
 import express from 'express';
 import cors from 'cors';
 
