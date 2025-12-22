@@ -1,10 +1,10 @@
 // packages/server/src/api/ar.invoice.read.routes.ts
-// ACCOUNTS RECEIVABLE — INVOICE READ API
+// ACCOUNTS RECEIVABLE — INVOICE READ API (PHASE 4.2)
 //
 // - Read-only
 // - Deterministic
 // - Event-sourced
-// - Derived strictly from ar_invoice_events
+// - UI-safe projection
 // - No ledger coupling
 // - Governance-safe
 
@@ -16,19 +16,35 @@ import { applyARInvoiceEvent } from '@bms/core/src/ar/AccountsReceivable';
 const router = Router();
 
 /**
+ * Internal read projection
+ * Stable, UI-safe shape
+ */
+function projectInvoice(invoiceId: string, state: any) {
+  return {
+    invoiceId,
+    customerId: state.customerId ?? null,
+    status: state.status,
+    currency: state.currency,
+    totalAmount: state.totalAmount,
+    outstandingAmount:
+      state.outstandingAmount ?? state.totalAmount,
+    issuedAt: state.issuedAt,
+    dueDate: state.dueDate ?? null,
+  };
+}
+
+/**
  * GET /api/ar/invoices/:invoiceId
  *
- * Returns the reconstructed invoice state
- * derived from the append-only event stream.
+ * Returns the reconstructed invoice
+ * as a stable read projection.
  */
 router.get('/invoices/:invoiceId', async (req: Request, res: Response) => {
   try {
     const { invoiceId } = req.params;
 
     if (!invoiceId) {
-      return res.status(400).json({
-        error: 'invoiceId is required',
-      });
+      return res.status(400).json({ error: 'invoiceId is required' });
     }
 
     const pool = getPostgresPool();
@@ -37,16 +53,13 @@ router.get('/invoices/:invoiceId', async (req: Request, res: Response) => {
     const events = await repo.listByInvoice(invoiceId);
 
     if (events.length === 0) {
-      return res.status(404).json({
-        error: 'Invoice not found',
-      });
+      return res.status(404).json({ error: 'Invoice not found' });
     }
 
-    const invoice = events.reduce(applyARInvoiceEvent, undefined as any);
+    const state = events.reduce(applyARInvoiceEvent, undefined as any);
+    const projection = projectInvoice(invoiceId, state);
 
-    res.status(200).json({
-      invoice,
-    });
+    res.status(200).json({ invoice: projection });
   } catch (err: any) {
     res.status(503).json({
       error: 'AR invoice read unavailable',
@@ -58,17 +71,14 @@ router.get('/invoices/:invoiceId', async (req: Request, res: Response) => {
 /**
  * GET /api/ar/invoices/:invoiceId/events
  *
- * Returns the full immutable event stream
- * for audit and troubleshooting.
+ * Immutable audit stream
  */
 router.get('/invoices/:invoiceId/events', async (req: Request, res: Response) => {
   try {
     const { invoiceId } = req.params;
 
     if (!invoiceId) {
-      return res.status(400).json({
-        error: 'invoiceId is required',
-      });
+      return res.status(400).json({ error: 'invoiceId is required' });
     }
 
     const pool = getPostgresPool();
@@ -77,15 +87,10 @@ router.get('/invoices/:invoiceId/events', async (req: Request, res: Response) =>
     const events = await repo.listByInvoice(invoiceId);
 
     if (events.length === 0) {
-      return res.status(404).json({
-        error: 'Invoice not found',
-      });
+      return res.status(404).json({ error: 'Invoice not found' });
     }
 
-    res.status(200).json({
-      invoiceId,
-      events,
-    });
+    res.status(200).json({ invoiceId, events });
   } catch (err: any) {
     res.status(503).json({
       error: 'AR invoice events unavailable',
