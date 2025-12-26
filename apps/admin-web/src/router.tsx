@@ -3,12 +3,13 @@
 //
 // Rules:
 // - AR / master data pages are ALWAYS accessible
-// - Snapshot governance applies ONLY to reporting
+// - Snapshot governance is enforced BACKEND-SIDE only
+// - UI must never block a valid build
 // - Deterministic navigation
 // - No silent redirects
 
 import { createBrowserRouter } from 'react-router-dom';
-import ApprovedSnapshotResolver from './ApprovedSnapshotResolver.tsx';
+
 // Pages
 import ARInvoicesPage from './pages/ARInvoices';
 
@@ -43,22 +44,16 @@ export const router = createBrowserRouter([
   },
 
   // ─────────────────────────────────────────────
-  // SNAPSHOT-GOVERNED REPORTING
+  // REPORTING (SNAPSHOT GOVERNANCE — BACKEND)
   // ─────────────────────────────────────────────
   {
-    path: '/reports',
-    element: <ApprovedSnapshotResolver />,
-    children: [
-      {
-        path: 'snapshots',
-        element: (
-          <div style={{ padding: 24 }}>
-            <h2>Snapshots</h2>
-            <p>Snapshot list goes here</p>
-          </div>
-        ),
-      },
-    ],
+    path: '/reports/snapshots',
+    element: (
+      <div style={{ padding: 24 }}>
+        <h2>Reporting Snapshots</h2>
+        <p>Snapshot list goes here</p>
+      </div>
+    ),
   },
 
   // ─────────────────────────────────────────────

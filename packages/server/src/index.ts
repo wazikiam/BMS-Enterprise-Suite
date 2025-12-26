@@ -91,12 +91,20 @@ import financePeriodCommandRoutes from './api/financePeriods.command.routes';
 import arReadRoutes from './api/ar.read.routes';
 import arInvoiceReadRoutes from './api/ar.invoice.read.routes';
 import arAgingReadRoutes from './api/ar.aging.read.routes';
+import arCustomerSummaryReadRoutes from './api/ar.customer.summary.read.routes';
 
 // ─────────────────────────────────────────────────────────────
 // Financial Snapshots (READ-ONLY)
 // ─────────────────────────────────────────────────────────────
 
 import { createFinancialSnapshotReadRoutes } from './api/financialSnapshots.routes';
+
+// ─────────────────────────────────────────────────────────────
+// Reconciliation (READ-ONLY, SNAPSHOT-AWARE)
+// ─────────────────────────────────────────────────────────────
+
+import { createReconciliationRoutes } from './api/reconciliation.routes';
+import { PostgresARSubledgerExposureProvider } from './reconciliation/PostgresARSubledgerExposureProvider';
 
 // ─────────────────────────────────────────────────────────────
 // Internal Snapshot Vault (OPERATOR ONLY)
@@ -224,12 +232,77 @@ app.use('/api/finance', financePeriodCommandRoutes);
 app.use('/api/ar', arReadRoutes);
 app.use('/api/ar', arInvoiceReadRoutes);
 app.use('/api/ar', arAgingReadRoutes);
+app.use('/api/ar', arCustomerSummaryReadRoutes);
 
 // ─────────────────────────────────────────────────────────────
 // FINANCIAL SNAPSHOT READ API (IMMUTABLE)
 // ─────────────────────────────────────────────────────────────
 
 app.use('/api/finance/snapshots', createFinancialSnapshotReadRoutes());
+
+// ─────────────────────────────────────────────────────────────
+// RECONCILIATION API (READ-ONLY, SNAPSHOT-AWARE)
+// ─────────────────────────────────────────────────────────────
+
+const ledgerAccountIndex = new LedgerAccountIndex(pool);
+const ledgerBalanceRepository = new PostgresLedgerBalanceRepository(pool);
+
+// AR exposure provider (authoritative from settlement events)
+const arExposureProvider = new PostgresARSubledgerExposureProvider(pool);
+
+app.use(
+  '/api',
+  createReconciliationRoutes({
+    create() {
+      return {
+        // Ledger control account provider (computed from ledger entries)
+        ledger: {
+          async getControlAccountNetMinorByCurrency(input) {
+            const refs = await ledgerAccountIndex.listAccounts();
+            const rows: { currency: string; ledgerControlNetMinor: number }[] = [];
+
+            for (const a of refs) {
+              if (a.accountId !== input.controlAccountCode) continue;
+
+              const bal = await ledgerBalanceRepository.getAccountBalance({
+                accountId: a.accountId,
+                currency: a.currency,
+                asOf: new Date(input.asOf),
+              });
+
+              // NOTE:
+              // LedgerBalance.balance may be in MAJOR units depending on your ledger policy.
+              // This wiring remains consistent with existing ledger balance output.
+              rows.push({
+                currency: a.currency,
+                ledgerControlNetMinor: Math.trunc(bal.balance),
+              });
+            }
+
+            return rows;
+          },
+        },
+
+        // AP provider remains FAIL-CLOSED until AP exposure policy is finalized
+        ap: {
+          async getAPNetMinorByCurrency() {
+            throw new Error(
+              'AP reconciliation provider is not wired yet (governance fail-closed). ' +
+                'Define AP settlement/exposure policy before enabling AP control reconciliation.'
+            );
+          },
+        },
+
+        // AR provider WIRED (authoritative from settlement events)
+        ar: {
+          async getARNetMinorByCurrency(input) {
+            return arExposureProvider.getARNetMinorByCurrency(input);
+          },
+        },
+      };
+    },
+  })
+);
 
 // ─────────────────────────────────────────────────────────────
 // LEDGER WRITE API
@@ -255,23 +328,19 @@ app.use(
 // LEDGER BALANCE API (READ-ONLY, SNAPSHOT-CONSISTENT)
 // ─────────────────────────────────────────────────────────────
 
-const ledgerAccountIndex = new LedgerAccountIndex(pool);
-const ledgerBalanceRepository = new PostgresLedgerBalanceRepository(pool);
-
 const snapshotLedgerReadPort = {
   async getBalance(params: { periodFrom?: Date; periodTo?: Date; asOf: Date }) {
     try {
-      const accountRefs = await ledgerAccountIndex.listAccounts();
+      const refs = await ledgerAccountIndex.listAccounts();
       const balances = [];
 
-      for (const ref of accountRefs) {
-        const balance = await ledgerBalanceRepository.getAccountBalance({
+      for (const ref of refs) {
+        const bal = await ledgerBalanceRepository.getAccountBalance({
           accountId: ref.accountId,
           currency: ref.currency,
           asOf: params.asOf,
         });
-
-        balances.push(balance);
+        balances.push(bal);
       }
 
       return { balances };
